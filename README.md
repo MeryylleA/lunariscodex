@@ -13,12 +13,6 @@ Welcome to the repository of **Lunaris Codex**, a 100% Brazilian Natural Languag
 
 ## Technologies Used
 
-![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=flat&logo=PyTorch&logoColor=white)  
-🤗 [![Hugging Face](https://huggingface.co/datasets/huggingface/badges/resolve/main/hugging-face-sm-dark.svg)](https://huggingface.co)  
-![Python](https://img.shields.io/badge/Python-%234B8BBE.svg?style=flat&logo=Python&logoColor=white)  
-![NVIDIA](https://img.shields.io/badge/NVIDIA-%2376B900.svg?style=flat&logo=NVIDIA&logoColor=white)  
-![OVHcloud](https://img.shields.io/badge/OVHcloud-%23123F7D.svg?style=flat&logo=OVH&logoColor=white)
-
 - **Framework**: Built using PyTorch for model development and training.
 - **Libraries**: Leveraging Hugging Face ecosystem, including Transformers for architecture and tokenization, and Datasets for high-quality data curation.
 - **Programming**: Primarily coded in Python, with support for generating code in multiple languages.
