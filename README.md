@@ -1,5 +1,7 @@
 # Lunaris Codex
 
+![Lunaris Codex](lunaris-codex.jpg)
+
 Bem-vindo ao repositório do **Lunaris Codex**, um projeto de Processamento de Linguagem Natural (NLP) 100% brasileiro focado em programação. Desenvolvido do zero, o Lunaris Codex é um modelo baseado em Transformer projetado para gerar e interpretar código em diversas linguagens, como Python, JavaScript, Java e Rust, com ênfase especial em Python.
 
 ## Resumo
@@ -17,7 +19,7 @@ O Lunaris Codex está em desenvolvimento ativo e será disponibilizado em breve 
 
 Quer saber mais? Acompanhe o progresso:
 - [LinkedIn](https://www.linkedin.com/in/francisco-antonio-0434aa284/)
-- [Email](business@mooncloudservices.tech)
+- [Email](mailto:business@mooncloudservices.tech)
 - [Discord](https://discord.gg/FmnSVTeSYF)
 
 © 2025 Moon Cloud Services
