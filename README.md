@@ -2,22 +2,43 @@
 
 ![Lunaris Codex](lunaris-codex.jpg)
 
-Bem-vindo ao repositório do **Lunaris Codex**, um projeto de Processamento de Linguagem Natural (NLP) 100% brasileiro focado em programação. Desenvolvido do zero, o Lunaris Codex é um modelo baseado em Transformer projetado para gerar e interpretar código em diversas linguagens, como Python, JavaScript, Java e Rust, com ênfase especial em Python.
+Welcome to the repository of **Lunaris Codex**, a 100% Brazilian Natural Language Processing (NLP) project focused on programming. Built from scratch, Lunaris Codex is a Transformer-based model designed to generate and interpret code in multiple languages, such as Python, JavaScript, Java, and Rust, with a special emphasis on Python.
 
-## Resumo
+## Summary
 
-- **Objetivo**: Criar uma ferramenta de IA eficiente para programadores, ajudando na geração de código, interpretação e resolução de problemas técnicos.
-- **Tecnologia**: Arquitetura Transformer com Alibi, treinado com 617 milhões de tokens (expansão para 2-4 bilhões em andamento).
-- **Datasets**: The Stack V2, FineWeb e outros, com foco em código técnico.
-- **Startup**: Desenvolvido pela Moon Cloud Services, uma empresa voltada para inovação em IA e redes neurais.
+- **Objective**: Develop an efficient AI tool for programmers to assist with code generation, interpretation, and technical problem-solving.
+- **Technology**: Transformer architecture optimized with Alibi (replacing UOP for better efficiency), trained on 617 million tokens, with plans to expand to 2-4 billion tokens.
+- **Datasets**: The Stack V2, FineWeb, and other technical code-focused datasets, prioritizing Python.
+- **Startup**: Developed by Moon Cloud Services, a company dedicated to innovation in AI and neural networks.
+
+## Technologies Used
+
+![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=flat&logo=PyTorch&logoColor=white)
+![Transformers](https://img.shields.io/badge/Transformers-%23007ACC.svg?style=flat&logo=HuggingFace&logoColor=white)
+![Python](https://img.shields.io/badge/Python-%233776AB.svg?style=flat&logo=Python&logoColor=white)
+![NVIDIA](https://img.shields.io/badge/NVIDIA-%2376B900.svg?style=flat&logo=NVIDIA&logoColor=white)
+![OVHcloud](https://img.shields.io/badge/OVHcloud-%23123F7D.svg?style=flat&logo=OVH&logoColor=white)
+
+- **Framework**: Built using PyTorch for model development and training.
+- **Libraries**: Leveraging Hugging Face Transformers for architecture and tokenization.
+- **Programming**: Primarily coded in Python, with support for generating code in multiple languages.
+- **Hardware**: Trained on 4 NVIDIA H100 GPUs for high-performance computing.
+- **Infrastructure**: Hosted on OVHcloud servers with $10,000 in credits for scalable processing.
+
+## Project Details
+
+- **Model Size**: Between 160 million and 260 million parameters, balancing efficiency and capability.
+- **Training Goals**: Expanding the dataset to 2-4 billion tokens for a full training run, enhancing accuracy and versatility.
+- **Features**: Code generation, interpretation, debugging assistance, and optimization of programming tasks.
+- **Open Source**: The source code will be released on GitHub under an open-source license, with restrictions to prevent unauthorized modifications.
 
 ## Status
 
-O Lunaris Codex está em desenvolvimento ativo e será disponibilizado em breve como um projeto open-source aqui no GitHub. Fique de olho para atualizações!
+Lunaris Codex is under active development and will be available soon as an open-source project on this GitHub repository. Stay tuned for updates!
 
-## Contato
+## Contact
 
-Quer saber mais? Acompanhe o progresso:
+Want to learn more? Follow our progress:
 - [LinkedIn](https://www.linkedin.com/in/francisco-antonio-0434aa284/)
 - [Email](mailto:business@mooncloudservices.tech)
 - [Discord](https://discord.gg/FmnSVTeSYF)
