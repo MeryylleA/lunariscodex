@@ -8,19 +8,20 @@ Welcome to the repository of **Lunaris Codex**, a 100% Brazilian Natural Languag
 
 - **Objective**: Develop an efficient AI tool for programmers to assist with code generation, interpretation, and technical problem-solving.
 - **Technology**: Transformer architecture optimized with Alibi (replacing UOP for better efficiency), trained on 617 million tokens, with plans to expand to 2-4 billion tokens.
-- **Datasets**: The Stack V2, FineWeb, and other technical code-focused datasets, prioritizing Python.
+- **Datasets**: The Stack V2, FineWeb, Hugging Face Datasets, and other technical code-focused datasets, prioritizing Python.
 - **Startup**: Developed by Moon Cloud Services, a company dedicated to innovation in AI and neural networks.
 
 ## Technologies Used
 
-![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=flat&logo=PyTorch&logoColor=white)
-![Transformers](https://img.shields.io/badge/Transformers-%23007ACC.svg?style=flat&logo=HuggingFace&logoColor=white)
-![Python](https://img.shields.io/badge/Python-%233776AB.svg?style=flat&logo=Python&logoColor=white)
-![NVIDIA](https://img.shields.io/badge/NVIDIA-%2376B900.svg?style=flat&logo=NVIDIA&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-%23007ACC.svg?style=flat&logo=PyTorch&logoColor=white)
+![Transformers](https://img.shields.io/badge/Transformers-%231A3C66.svg?style=flat&logo=HuggingFace&logoColor=white)
+![Hugging%20Face%20Datasets](https://img.shields.io/badge/HF%20Datasets-%232D5A9B.svg?style=flat&logo=HuggingFace&logoColor=white)
+![Python](https://img.shields.io/badge/Python-%234B8BBE.svg?style=flat&logo=Python&logoColor=white)
+![NVIDIA](https://img.shields.io/badge/NVIDIA-%2350C878.svg?style=flat&logo=NVIDIA&logoColor=white)
 ![OVHcloud](https://img.shields.io/badge/OVHcloud-%23123F7D.svg?style=flat&logo=OVH&logoColor=white)
 
 - **Framework**: Built using PyTorch for model development and training.
-- **Libraries**: Leveraging Hugging Face Transformers for architecture and tokenization.
+- **Libraries**: Leveraging Hugging Face Transformers for architecture and tokenization, and Hugging Face Datasets for high-quality data curation.
 - **Programming**: Primarily coded in Python, with support for generating code in multiple languages.
 - **Hardware**: Trained on 4 NVIDIA H100 GPUs for high-performance computing.
 - **Infrastructure**: Hosted on OVHcloud servers with $10,000 in credits for scalable processing.
