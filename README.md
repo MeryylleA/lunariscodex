@@ -14,8 +14,8 @@ Welcome to the repository of **Lunaris Codex**, a 100% Brazilian Natural Languag
 ## Technologies Used
 
 ![PyTorch](https://img.shields.io/badge/PyTorch-%23007ACC.svg?style=flat&logo=PyTorch&logoColor=white)
-![Transformers](https://img.shields.io/badge/Transformers-%231A3C66.svg?style=flat&logo=HuggingFace&logoColor=white)
-![Hugging%20Face%20Datasets](https://img.shields.io/badge/HF%20Datasets-%232D5A9B.svg?style=flat&logo=HuggingFace&logoColor=white)
+![Transformers](https://img.shields.io/badge/Transformers-%23FFD21E.svg?style=flat&logo=HuggingFace&logoColor=black)
+![Hugging%20Face%20Datasets](https://img.shields.io/badge/HF%20Datasets-%23FFD21E.svg?style=flat&logo=HuggingFace&logoColor=black)
 ![Python](https://img.shields.io/badge/Python-%234B8BBE.svg?style=flat&logo=Python&logoColor=white)
 ![NVIDIA](https://img.shields.io/badge/NVIDIA-%2350C878.svg?style=flat&logo=NVIDIA&logoColor=white)
 ![OVHcloud](https://img.shields.io/badge/OVHcloud-%23123F7D.svg?style=flat&logo=OVH&logoColor=white)
