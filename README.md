@@ -1,40 +1,109 @@
-# Lunaris Codex
+# 🌙 Lunaris Codex
 
-![Lunaris Codex](lunaris-codex.jpg)
+**Lunaris Codex** is a custom Transformer Decoder architecture designed for code generation, written entirely in PyTorch with support for modern optimizations like **LoRA**, **FlashAttention**, and **ALiBi**. This repository includes the full source code for training and model definition — designed to be lightweight, scalable, and GPU-efficient.
 
-Welcome to the repository of **Lunaris Codex**, a 100% Brazilian Natural Language Processing (NLP) project focused on programming. Built from scratch, Lunaris Codex is a Transformer-based model designed to generate and interpret code in multiple languages, such as Python, JavaScript, Java, and Rust, with a special emphasis on Python.
+> ⚠️ **Note:** This release includes only the architecture and training system. Pretrained weights will be released in the future, trained on a massive-scale dataset using NVIDIA **H100 SXM** and **GH200** GPUs.
 
-## Summary
+---
 
-- **Objective**: Develop an efficient AI tool for programmers to assist with code generation, interpretation, and technical problem-solving.
-- **Technology**: Transformer architecture optimized with Alibi (replacing UOP for better efficiency), trained on 617 million tokens, with plans to expand to 2-4 billion tokens.
-- **Datasets**: The Stack V2, FineWeb, Hugging Face Datasets, and other technical code-focused datasets, prioritizing Python.
-- **Startup**: Developed by Moon Cloud Services, a company dedicated to innovation in AI and neural networks.
+## ✨ Features
 
-## Technologies Used
+- ⚙️ **Decoder-only Transformer**, optimized for code and natural language
+- 🚀 **LoRA support** (Low-Rank Adaptation) for efficient fine-tuning
+- ⚡ **FlashAttention integration** for fast attention on modern GPUs
+- 🧠 **ALiBi** positional bias for long-context support
+- 📏 ~183M parameters with default config (can be scaled easily)
+- 🧪 Simple, scalable **training pipeline** with AMP, torch.compile, and safetensors
 
-- **Framework**: Built using PyTorch for model development and training.
-- **Libraries**: Leveraging Hugging Face ecosystem, including Transformers for architecture and tokenization, and Datasets for high-quality data curation.
-- **Programming**: Primarily coded in Python, with support for generating code in multiple languages.
-- **Hardware**: Trained on 4 NVIDIA H100 GPUs for high-performance computing.
-- **Infrastructure**: Hosted on OVHcloud servers with $10,000 in credits for scalable processing.
+---
 
-## Project Details
+## 🧱 Architecture Overview
 
-- **Model Size**: Between 160 million and 260 million parameters, balancing efficiency and capability.
-- **Training Goals**: Expanding the dataset to 2-4 billion tokens for a full training run, enhancing accuracy and versatility.
-- **Features**: Code generation, interpretation, debugging assistance, and optimization of programming tasks.
-- **Open Source**: The source code will be released on GitHub under an open-source license, with restrictions to prevent unauthorized modifications.
+Lunaris Codex follows a modern decoder-only Transformer structure with several enhancements:
 
-## Status
+- **10 transformer blocks** (configurable)
+- **768 hidden size**, **12 attention heads**
+- **SwigLU activation** in the feedforward blocks
+- **ALiBi** is used instead of absolute positional embeddings
+- **LoRA** is applied to all projection layers (`qkv`, `output`, and feedforward)
+- **FlashAttention** replaces traditional attention computation
+- **LayerScale** stabilizes residual connections
+- **Final tied embedding head** for efficiency and weight sharing
 
-Lunaris Codex is under active development and will be available soon as an open-source project on this GitHub repository. Stay tuned for updates!
+> All design decisions are optimized for training speed, memory efficiency, and compatibility with large-scale tokenizers like StarCoder.
 
-## Contact
+---
 
-Want to learn more? Follow our progress:
-- [LinkedIn](https://www.linkedin.com/in/francisco-antonio-0434aa284/)
-- [Email](mailto:business@mooncloudservices.tech)
-- [Discord](https://discord.gg/FmnSVTeSYF)
+## 🧢 Training
 
-© 2025 Moon Cloud Services
+The repository includes a full training loop (`train.py`) compatible with custom datasets. The model uses:
+
+- `torch.cuda.amp` (mixed precision)
+- `AdamW` optimizer with fused operations
+- Checkpointing using `.safetensors`
+- Real-time metrics: **loss**, **perplexity**, and **top-1 accuracy**
+
+The model is designed for training on **multi-GPU** setups with full support for TF32/BF16 performance on **NVIDIA A100**, **H100**, and **GH200**.
+
+---
+
+## 🧠 What's included
+
+| Component                  | Status         |
+|---------------------------|----------------|
+| Model architecture         | ✅ Released    |
+| LoRA integration           | ✅ Released    |
+| FlashAttention support     | ✅ Released    |
+| ALiBi + LayerScale         | ✅ Released    |
+| Training pipeline          | ✅ Released    |
+| Dataset preprocessing      | ❌ Private     |
+| Inference system (CLI/UI)  | ❌ Private     |
+| Pretrained weights         | 🔜 Coming soon |
+
+---
+
+## ⚠️ Roadmap
+
+- 🧬 Release **pretrained checkpoints** trained on ~1B+ tokens of high-quality code
+- 📦 Public **inference UI / API**
+- 📖 Hugging Face model card & demo
+- 🌐 Documentation for integrating with LangChain, Discord bots, or VSCode plugins
+
+---
+
+## 📦 Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+Dependencies include:
+- `torch`
+- `transformers`
+- `safetensors`
+- `numpy`
+- `datasets` (for custom extensions)
+
+---
+
+## 📝 License
+
+This project is licensed under the **MIT License**.  
+Copyright (c) 2025 **Francisco Antonio**
+
+See [`LICENSE`](LICENSE) for more details.
+
+---
+
+## 🌟 Credits
+
+Developed by [Francisco Antonio](https://github.com/MeryylleA)  
+Feel free to star ⭐ the project and share feedback or contributions!
+
+> For collaborations, dataset requests, or research interest: contact via GitHub or [@Meryylle](https://x.com/a93918)
+
+---
+
+## 🌌 Why "Lunaris"?
+
+> *"Because great ideas are born in silence — and shine like the moon."* 🌙
