@@ -1,4 +1,3 @@
-```markdown
 # Lunaris Text Cleaner (`lunaris_text_cleaner`)
 
 **Version: 0.2.1**
