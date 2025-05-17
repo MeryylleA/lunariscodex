@@ -1,0 +1,18 @@
+[tool.black]
+line-length = 88
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.nox
+  | \.venv
+  | \.venv-ci  # <--- ADICIONADO AQUI
+  | _build
+  | buck-out
+  | build
+  | dist
+  | node_modules
+)/
+'''
