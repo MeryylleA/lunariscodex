@@ -1,0 +1,85 @@
+name: Lunaris Codex CI
+
+# Quando o workflow deve rodar
+on:
+  push:
+    branches: [ main ] # Roda em push para o branch main
+  pull_request:
+    branches: [ main ] # Roda quando um PR é aberto/atualizado para o main
+  workflow_dispatch: # Permite rodar manualmente
+
+jobs: # Define um ou mais trabalhos
+  test-pipeline: # Nome do nosso job
+    runs-on: ubuntu-latest # Qual tipo de máquina virtual usar (runner)
+
+    steps: # Sequência de passos para este job
+      # Passo 1: Clonar o repositório para dentro do runner
+      - name: Checkout repository
+        uses: actions/checkout@v4 # Usa uma Action pronta
+
+      # Passo 2: Configurar o Python (ex: Python 3.11)
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Passo 3: Instalar dependências
+      - name: Install dependencies
+        run: |
+          python -m venv .venv-ci
+          source .venv-ci/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          # Não instalaremos flash-attn aqui para testar o fallback
+
+      # Passo 4: Criar um dataset de teste minúsculo para prepare_data.py
+      - name: Create dummy dataset for prepare_data
+        run: |
+          source .venv-ci/bin/activate
+          mkdir -p ./temp_data
+          echo "def func1(): pass" > ./temp_data/sample1.py
+          echo "class MyClass: pass" > ./temp_data/sample2.py
+
+      # Passo 5: Rodar prepare_data.py com o dataset dummy
+      - name: Run prepare_data.py
+        run: |
+          source .venv-ci/bin/activate
+          python prepare_data.py \
+            --data_source_type text_file_lines \
+            --dataset_name_or_path "./temp_data/*.py" \
+            --tokenizer_name_or_path HuggingFaceH4/tiny-llamas \ # Um tokenizer bem pequeno para ser rápido
+            --max_length 32 \
+            --output_path ./processed_data_ci/ci_prepared_data.memmap \
+            --max_examples 2
+
+      # Passo 6: Rodar train.py com um modelo "toy" e os dados preparados
+      - name: Run train.py (toy model)
+        run: |
+          source .venv-ci/bin/activate
+          python train.py \
+            --memmap_file_train ./processed_data_ci/ci_prepared_data.memmap \
+            --num_sequences_train 2 \
+            --tokenizer_name_or_path HuggingFaceH4/tiny-llamas \
+            --dataset_max_length 32 \
+            --model_max_seq_len 32 \
+            --d_model 32 \
+            --n_layers 1 \
+            --n_heads 1 \
+            --batch_size 1 \
+            --num_epochs 1 \
+            --device cpu \
+            --checkpoint_dir ./checkpoints_ci \
+            --log_interval 1 \
+            --lora_rank 0 \ # Teste full com modelo minúsculo
+            --seed 42
+            # Sem --use_torch_compile para ser mais rápido em CPU CI
+
+      # Passo 7 (Opcional): Verificar se os arquivos de checkpoint foram criados
+      - name: Check for checkpoint files
+        run: |
+          ls -l ./checkpoints_ci
+          # Poderia adicionar um teste mais robusto aqui
+          if [ ! -f ./checkpoints_ci/lunaris_codex_epoch-1_step-2.pt ]; then # Ajuste o nome esperado do arquivo
+            echo "Checkpoint file not found!"
+            exit 1
+          fi
