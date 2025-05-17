@@ -1,6 +1,39 @@
-torch
-transformers
-datasets
-numpy
-tqdm
-sentencepiece
+# Lunaris Codex - Core Dependencies
+# ---------------------------------
+# This file lists the essential Python packages required to run the Lunaris Codex
+# data preparation, training, and model definition scripts.
+#
+# Recommended Python version: 3.11.x (tested with 3.11.9)
+#
+# To install these dependencies into your virtual environment:
+# pip install -r requirements.txt
+#
+# For GPU support (NVIDIA), ensure you have a compatible CUDA toolkit installed
+# and consider installing the PyTorch version that matches your CUDA version.
+# The torch version listed here will attempt to install with CUDA support if available.
+
+# Core deep learning framework
+torch>=2.1.0 # PyTorch 2.0+ for F.scaled_dot_product_attention and torch.compile features. 2.7.0 was used in recent tests.
+
+# Hugging Face ecosystem for models, tokenizers, and datasets
+transformers>=4.30.0 # For AutoTokenizer and other utilities
+datasets>=2.10.0     # For load_dataset and dataset handling
+
+# Numerical operations and memory-mapped files
+numpy>=1.23.0
+
+# Progress bars
+tqdm>=4.60.0
+
+# For specific tokenizers (like StarCoder's base or custom SentencePiece models)
+sentencepiece>=0.1.98 
+# sentencepiece==0.2.0 # Version 0.2.0 installed successfully in tests
+
+# Secure and fast tensor serialization (good for model weight sharing, though train checkpoints use .pt)
+safetensors>=0.4.0
+
+# --- Optional for NVIDIA GPU Acceleration ---
+# FlashAttention for optimized attention mechanism (install manually if you have a compatible GPU & CUDA setup)
+# Not listed here to ensure CPU-only setup works out-of-the-box.
+# See README for installation instructions if you want to use it:
+# pip install flash-attn --no-build-isolation
