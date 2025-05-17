@@ -1,13 +1,12 @@
-# Lunaris Text Cleaner (`lunaris_text_cleaner`)
+**Version: 0.3.1**
 
-**Version: 0.2.1**
+`lunaris_text_cleaner` is a C++ command-line utility designed to perform various cleaning and normalization operations on text files. It can process individual files or entire directories (recursively), preparing them for further processing steps, such as tokenization for training language models like Lunaris Codex.
 
-`lunaris_text_cleaner` is a C++ command-line utility designed to perform various cleaning and normalization operations on large text files, preparing them for further processing étapes, such as tokenization for training language models like Lunaris Codex.
-
-It aims to provide a fast and efficient way to improve dataset quality by handling common text issues directly in C++.
+It aims to provide a fast and efficient way to improve dataset quality by handling common text issues directly in C++, and it reports the total processing time.
 
 ## Features
 
+-   **Flexible Input:** Processes a single text file or all matching files within a directory (with optional recursive search).
 -   **Whitespace Normalization:**
     -   Trims leading and trailing whitespace from each line.
     -   Reduces multiple internal spaces/tabs to a single space.
@@ -15,19 +14,21 @@ It aims to provide a fast and efficient way to improve dataset quality by handli
 -   **Case Conversion:** Optionally converts all text to lowercase.
 -   **Non-Printable Character Removal:** Removes common non-printable ASCII characters while preserving essential whitespace like tabs (`\t`), newlines (`\n`), and carriage returns (`\r`).
 -   **URL Processing:**
-    -   Detects and removes common URL patterns.
-    -   Optionally replaces URLs with a user-defined placeholder string (e.g., `"[URL]"`).
+    -   Detects and removes/replaces common URL patterns.
+    -   Uses a user-defined placeholder string (e.g., `"[URL]"`) if provided.
 -   **Email Processing:**
-    -   Detects and removes common email address patterns.
-    -   Optionally replaces email addresses with a user-defined placeholder string (e.g., `"[EMAIL]"`).
--   **Exact Duplicate Line Removal:** After all other selected processing steps are applied to a line, this option can remove lines that are exact duplicates of previously processed and written lines.
--   **File Handling:** Reads from an input file and writes the cleaned content to a new output file, creating parent directories for the output file if they don't exist.
--   **Configurable:** All cleaning operations are controlled via command-line arguments.
+    -   Detects and removes/replaces common email address patterns.
+    -   Uses a user-defined placeholder string (e.g., `"[EMAIL]"`) if provided.
+-   **Exact Duplicate Line Removal:** After all other selected processing steps are applied to a line, this option can remove lines that are exact duplicates of previously processed and written lines (on a per-file basis if processing multiple files).
+-   **Directory Structure Replication:** When processing directories, the input's subdirectory structure is replicated in the output directory.
+-   **File Handling:** Reads from input and writes cleaned content to new output files, creating parent directories for output files if they don't exist.
+-   **Performance Indication:** Reports total execution time.
+-   **Configurable:** All operations are controlled via command-line arguments.
 
 ## Prerequisites
 
 -   A C++17 compatible compiler (e.g., `g++`).
--   Standard C++ libraries (iostream, fstream, string, vector, algorithm, cctype, filesystem, regex, set, iomanip, sstream).
+-   Standard C++ libraries (iostream, fstream, string, vector, algorithm, cctype, filesystem, regex, set, iomanip, sstream, chrono).
 -   `std::filesystem` support is part of C++17.
 
 ## Compilation
@@ -44,33 +45,44 @@ g++ lunaris_text_cleaner.cpp -o lunaris_text_cleaner -std=c++17 -lstdc++fs
 
 ## Usage
 
-Run the compiled executable from your terminal, providing the input file, output file, and desired cleaning options:
+Run the compiled executable from your terminal.
 
+**For a single file:**
 ```bash
 ./lunaris_text_cleaner --input <input_file.txt> --output <cleaned_file.txt> [options...]
 ```
 
+**For all files in a directory (matching a pattern):**
+```bash
+./lunaris_text_cleaner --input <input_directory/> --output <output_directory/> [--input-pattern "*.log"] [--recursive] [options...]
+```
+
 ### Command-Line Arguments:
 
-*   `--input <path>`: **(Required)** Path to the input text file.
-*   `--output <path>`: **(Required)** Path to save the cleaned output text file.
-*   `--normalize-whitespace`: (Optional) Enable trimming and reduction of multiple whitespaces to a single space.
-*   `--remove-empty-lines`: (Optional) Remove lines that become empty *after* whitespace normalization. This option is only effective if `--normalize-whitespace` is also enabled.
+*   `--input <path>`: **(Required)** Path to the input text file or source directory.
+*   `--output <path>`: **(Required)** Path to the output text file or base output directory. If input is a directory, output must also be a directory (will be created if it doesn't exist).
+*   `--input-pattern <glob>`: (Optional) Glob-like pattern for files if `--input` is a directory (e.g., `"*.txt"`, `"data_*"`, `"*.*"`). Default: `"*.txt"`.
+    *Current simple pattern matching supports: `*`, `*.*`, `*.ext`, `prefix_*`, `*_suffix`, `prefix_*_suffix` and exact names.*
+*   `--recursive`: (Optional) If `--input` is a directory, search for files recursively in subdirectories.
+*   `--normalize-whitespace`: (Optional) Enable trimming and reduction of multiple whitespaces.
+*   `--remove-empty-lines`: (Optional) Remove lines that become empty *after* whitespace normalization (requires `--normalize-whitespace`).
 *   `--to-lowercase`: (Optional) Convert all text to lowercase.
-*   `--remove-non-printable`: (Optional) Remove non-printable ASCII characters (preserves tab, newline, carriage return).
-*   `--process-urls`: (Optional) Enable processing of URLs. If `--url-placeholder` is not provided or is empty, URLs will be removed.
-*   `--url-placeholder <str>`: (Optional) String to replace detected URLs with (e.g., `"<URL_TOKEN>"`). Effective only if `--process-urls` is set.
-*   `--process-emails`: (Optional) Enable processing of email addresses. If `--email-placeholder` is not provided or is empty, emails will be removed.
-*   `--email-placeholder <str>`: (Optional) String to replace detected email addresses with (e.g., `"<EMAIL_TOKEN>"`). Effective only if `--process-emails` is set.
-*   `--remove-exact-duplicates`: (Optional) Remove lines that are exact duplicates of previously processed and written lines. This check is performed *after* all other enabled cleaning operations for a given line.
+*   `--remove-non-printable`: (Optional) Remove non-printable ASCII characters (preserves tab, newline, CR).
+*   `--process-urls`: (Optional) Enable processing of URLs. If `--url-placeholder` is empty, URLs are removed.
+*   `--url-placeholder <str>`: (Optional) String to replace detected URLs with. Effective if `--process-urls` is set.
+*   `--process-emails`: (Optional) Enable processing of email addresses. If `--email-placeholder` is empty, emails are removed.
+*   `--email-placeholder <str>`: (Optional) String to replace detected email addresses with. Effective if `--process-emails` is set.
+*   `--remove-exact-duplicates`: (Optional) Remove lines that are exact duplicates (after all other enabled per-line cleaning).
 *   `-h`, `--help`: Display the help message and exit.
 
-### Example: Applying Multiple Cleaning Operations
+### Example: Cleaning all `.txt` files in a directory recursively
 
 ```bash
 ./lunaris_text_cleaner \
-    --input ./raw_dataset/corpus_part1.txt \
-    --output ./cleaned_dataset/corpus_part1_cleaned.txt \
+    --input ./raw_corpus_dir \
+    --output ./cleaned_corpus_dir \
+    --input-pattern "*.txt" \
+    --recursive \
     --normalize-whitespace \
     --remove-empty-lines \
     --to-lowercase \
@@ -79,33 +91,36 @@ Run the compiled executable from your terminal, providing the input file, output
     --remove-exact-duplicates
 ```
 This command will:
-1. Read from `raw_dataset/corpus_part1.txt`.
-2. Apply URL replacement (with `[URL]`).
-3. Apply email replacement (with `[EMAIL]`).
-4. Normalize whitespace on each line.
-5. Convert each line to lowercase.
-6. Remove any line that becomes empty after the above steps.
-7. Remove any line that, after all aformentioned processing, is an exact duplicate of a line already written to the output.
-8. Save the result to `cleaned_dataset/corpus_part1_cleaned.txt`.
+1. Search for all `.txt` files in `./raw_corpus_dir` and its subdirectories.
+2. For each file found:
+    a. Apply URL replacement (with `[URL]`).
+    b. Apply email replacement (with `[EMAIL]`).
+    c. Normalize whitespace.
+    d. Convert to lowercase.
+    e. Remove lines that became empty.
+    f. Remove exact duplicate lines within that file.
+3. Save the cleaned files to `./cleaned_corpus_dir`, preserving the subdirectory structure from `raw_corpus_dir`.
+4. Report overall statistics and total processing time.
 
-## Order of Operations
+## Order of Operations (per line)
 
-The cleaning steps are applied in the following order for each line read from the input file:
-1.  Non-printable character removal (if `--remove-non-printable` is set).
-2.  URL processing (removal or replacement, if `--process-urls` is set).
-3.  Email processing (removal or replacement, if `--process-emails` is set).
-4.  Whitespace normalization (if `--normalize-whitespace` is set).
-5.  Conversion to lowercase (if `--to-lowercase` is set).
-6.  Check for (and optionally remove) lines that became empty after the above.
-7.  Check for (and optionally remove) exact duplicate lines based on the fully processed content of the line.
+The cleaning steps are applied in the following order for each line:
+1.  Non-printable character removal.
+2.  URL processing.
+3.  Email processing.
+4.  Whitespace normalization.
+5.  Conversion to lowercase.
+6.  Check/removal of (now possibly) empty lines.
+7.  Check/removal of exact duplicates (based on the fully processed line content for that file).
 
 ## Future Considerations / Potential Improvements
 
--   Support for processing all files in an input directory (glob patterns).
--   More sophisticated URL and email detection regex.
--   Options for handling or normalizing specific Unicode characters or blocks.
+-   More sophisticated/robust glob pattern matching for `--input-pattern`.
+-   More advanced URL and email detection regex.
+-   Options for Unicode normalization (e.g., NFC, NFKC) or handling specific Unicode character blocks.
 -   Removal of near-duplicates (e.g., using MinHash or SimHash).
--   Language-specific cleaning rules (e.g., for code comments).
--   Performance optimizations for extremely large files (e.g., chunked reading and parallel processing if feasible).
+-   Language-specific cleaning rules (e.g., for code comments, though this is complex).
+-   Performance optimizations for extremely large files when not using directory iteration (e.g., chunked reading within `process_single_file` if it were to handle truly massive single files).
+-   Option to specify padding token ID for `lunaris_data_analyzer` (this is for the other tool, just a note).
 
 ---
