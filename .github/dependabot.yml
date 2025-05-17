@@ -1,0 +1,35 @@
+# .github/dependabot.yml
+version: 2
+updates:
+  # Configuration for Python pip dependencies
+  - package-ecosystem: "pip" # Specify the package manager for Python
+    directory: "/" # Location of your requirements.txt (root of the repository)
+    schedule:
+      interval: "weekly" # How often to check for updates (daily, weekly, monthly)
+      day: "monday"      # Optional: specify the day of the week (e.g., "monday")
+      time: "09:00"      # Optional: specify the time (UTC)
+      timezone: "America/Sao_Paulo" # Optional: specify your timezone for the schedule
+    # Optional: Reviewers for Dependabot PRs
+    # reviewers:
+    #   - "MeryylleA" # Your GitHub username
+    # Optional: Assignees for Dependabot PRs
+    # assignees:
+    #   - "MeryylleA"
+    # Optional: Labels to add to Dependabot PRs
+    # labels:
+    #   - "dependencies"
+    #   - "python"
+    # Optional: Commit message preferences
+    commit-message:
+      prefix: "chore(deps)" # A common prefix for dependency updates
+      prefix-development: "chore(deps-dev)" # For dev dependencies, if you separate them
+      include: "scope" # Include the scope (e.g., pip) in the commit message
+
+  # Configuration for GitHub Actions (to keep your workflows updated)
+  - package-ecosystem: "github-actions"
+    directory: "/" # Checks for actions in .github/workflows
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"
