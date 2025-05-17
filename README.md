@@ -1,6 +1,6 @@
 ---
 
-# 🌙 Lunaris Codex (Updated)
+🌙 Lunaris Codex (Updated)
 
 **Lunaris Codex** is a highly flexible and customizable Transformer Decoder architecture designed for code generation and language modeling. Written entirely in PyTorch, it features modern optimizations like **LoRA**, optional **FlashAttention**, **ALiBi** positional biases, and a comprehensive, configurable training and data preprocessing pipeline. This repository provides the full source code, enabling users to train their own decoder-only LLMs from scratch or fine-tune existing ones.
 
