@@ -1,58 +1,52 @@
 name: Lunaris Codex CI
 
-# Quando o workflow deve rodar
 on:
   push:
-    branches: [ main ] # Roda em push para o branch main
+    branches: [ main ]
   pull_request:
-    branches: [ main ] # Roda quando um PR é aberto/atualizado para o main
-  workflow_dispatch: # Permite rodar manualmente
+    branches: [ main ]
+  workflow_dispatch:
 
-jobs: # Define um ou mais trabalhos
-  test-pipeline: # Nome do nosso job
-    runs-on: ubuntu-latest # Qual tipo de máquina virtual usar (runner)
+jobs:
+  test-pipeline:
+    runs-on: ubuntu-latest
 
-    steps: # Sequência de passos para este job
-      # Passo 1: Clonar o repositório para dentro do runner
+    steps:
       - name: Checkout repository
-        uses: actions/checkout@v4 # Usa uma Action pronta
+        uses: actions/checkout@v4
 
-      # Passo 2: Configurar o Python (ex: Python 3.11)
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # Passo 3: Instalar dependências
       - name: Install dependencies
         run: |
           python -m venv .venv-ci
           source .venv-ci/bin/activate
           pip install --upgrade pip
           pip install -r requirements.txt
-          # Não instalaremos flash-attn aqui para testar o fallback
 
-      # Passo 4: Criar um dataset de teste minúsculo para prepare_data.py
       - name: Create dummy dataset for prepare_data
         run: |
-          source .venv-ci/bin/activate
+          # Não precisa ativar o venv aqui, pois o 'run' já usa o shell do passo
           mkdir -p ./temp_data
           echo "def func1(): pass" > ./temp_data/sample1.py
           echo "class MyClass: pass" > ./temp_data/sample2.py
 
-      # Passo 5: Rodar prepare_data.py com o dataset dummy
       - name: Run prepare_data.py
+        # Ativa o venv para este comando específico
+        # O shell: bash é implícito para `run` se não especificado
         run: |
-          source .venv-ci/bin/activate
+          source .venv-ci/bin/activate 
           python prepare_data.py \
             --data_source_type text_file_lines \
             --dataset_name_or_path "./temp_data/*.py" \
-            --tokenizer_name_or_path HuggingFaceH4/tiny-llamas \ # Um tokenizer bem pequeno para ser rápido
+            --tokenizer_name_or_path HuggingFaceH4/tiny-llamas \
             --max_length 32 \
             --output_path ./processed_data_ci/ci_prepared_data.memmap \
             --max_examples 2
 
-      # Passo 6: Rodar train.py com um modelo "toy" e os dados preparados
       - name: Run train.py (toy model)
         run: |
           source .venv-ci/bin/activate
@@ -70,16 +64,22 @@ jobs: # Define um ou mais trabalhos
             --device cpu \
             --checkpoint_dir ./checkpoints_ci \
             --log_interval 1 \
-            --lora_rank 0 \ # Teste full com modelo minúsculo
+            --lora_rank 0 \
             --seed 42
-            # Sem --use_torch_compile para ser mais rápido em CPU CI
 
-      # Passo 7 (Opcional): Verificar se os arquivos de checkpoint foram criados
       - name: Check for checkpoint files
         run: |
           ls -l ./checkpoints_ci
-          # Poderia adicionar um teste mais robusto aqui
-          if [ ! -f ./checkpoints_ci/lunaris_codex_epoch-1_step-2.pt ]; then # Ajuste o nome esperado do arquivo
-            echo "Checkpoint file not found!"
-            exit 1
+          # Ajuste o nome do arquivo de checkpoint esperado.
+          # O step global será num_examples / batch_size = 2 / 1 = 2.
+          # Epoch é 0 (primeira época), então epoch+1 é 1.
+          if [ ! -f ./checkpoints_ci/lunaris_codex_epoch-1_step-2.pt ]; then
+            echo "Checkpoint file 'lunaris_codex_epoch-1_step-2.pt' not found!"
+            # Verifique também se o best_model.pt foi criado se save_strategy=epoch
+            # if [ ! -f ./checkpoints_ci/best_model.pt ]; then
+            #   echo "best_model.pt not found!"
+            #   exit 1
+            # fi
+            exit 1 # Falha o job se o checkpoint principal não for encontrado
           fi
+          echo "Checkpoint files found."
