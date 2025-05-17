@@ -1,76 +1,77 @@
 # .github/workflows/ci.yml
 name: Lunaris Codex CI
 
-# Controls when the workflow will run
 on:
   push:
-    branches: [ main ] # Runs on pushes to the main branch
+    branches: [ main ]
   pull_request:
-    branches: [ main ] # Runs on pull requests targeting the main branch
-  workflow_dispatch:   # Allows manual triggering from the Actions tab
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  test-pipeline: # Defines a job named "test-pipeline"
-    runs-on: ubuntu-latest # Specifies the type of runner (virtual machine)
+  test-pipeline:
+    runs-on: ubuntu-latest
 
-    steps: # Sequence of tasks that will be executed as part of the job
-      # Step 1: Check out the repository code
-      # This action checks-out your repository under $GITHUB_WORKSPACE, so your workflow can access it.
+    steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2: Set up Python environment
-      # This action sets up a Python version and adds it to the PATH.
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # Step 3: Install project dependencies
-      # Creates a virtual environment, activates it, upgrades pip, and installs from requirements.txt.
       - name: Install dependencies
         run: |
           python -m venv .venv-ci
           source .venv-ci/bin/activate
           pip install --upgrade pip
           pip install -r requirements.txt
-          # We are not installing flash-attn here to test the CPU fallback path.
 
-      # Step 4: Create a small dummy dataset for prepare_data.py
-      # This ensures the CI has some minimal data to work with without downloading large datasets.
-      - name: Create dummy dataset for prepare_data
+      - name: Create dummy datasets for CI
         run: |
-          mkdir -p ./temp_data_ci 
-          echo "def function_one(): return 1" > ./temp_data_ci/sample_code_1.py
-          echo "class SampleClass:\n  def __init__(self):\n    self.value = 2" > ./temp_data_ci/sample_code_2.py
+          # Training data
+          mkdir -p ./temp_data_ci_train
+          echo "def train_function_one(): return 'train1'" > ./temp_data_ci_train/train_sample_1.py
+          echo "class TrainSampleClass:\n  value = 'train2'" > ./temp_data_ci_train/train_sample_2.py
+          # Validation data
+          mkdir -p ./temp_data_ci_val
+          echo "def validation_function(): return 'validation_data_here'" > ./temp_data_ci_val/val_sample_1.py
+          echo "# Another validation line" > ./temp_data_ci_val/val_sample_2.py # Add a second val line
 
-      # Step 5: Run prepare_data.py with the dummy dataset
-      # This tests the data preparation script.
-      # Uses a small, publicly available tokenizer (gpt2) to avoid gated model issues in CI without a token by default.
-      # If your main tokenizer (e.g., starcoder) requires a token, ensure HF_TOKEN is set for this step too.
-      - name: Run prepare_data.py
+      - name: Run prepare_data.py for training and validation sets
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }} # Use this if the tokenizer needs authentication (even public ones sometimes benefit)
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           source .venv-ci/bin/activate
+          echo "--- Preparing Training Data for CI ---"
           python prepare_data.py \
             --data_source_type text_file_lines \
-            --dataset_name_or_path "./temp_data_ci/*.py" \
+            --dataset_name_or_path "./temp_data_ci_train/*.py" \
             --tokenizer_name_or_path gpt2 \
             --max_length 32 \
-            --output_path ./processed_data_ci/ci_prepared_data.memmap \
-            --max_examples 2
+            --output_path ./processed_data_ci/ci_train_data.memmap \
+            --max_examples 2 # Ensure we process only the 2 train files
 
-      # Step 6: Run train.py with a "toy" model configuration using the prepared dummy data
-      # This tests the core training loop, model instantiation, and checkpointing.
-      - name: Run train.py (toy model)
+          echo "--- Preparing Validation Data for CI ---"
+          python prepare_data.py \
+            --data_source_type text_file_lines \
+            --dataset_name_or_path "./temp_data_ci_val/*.py" \
+            --tokenizer_name_or_path gpt2 \
+            --max_length 32 \
+            --output_path ./processed_data_ci/ci_val_data.memmap \
+            --max_examples 2 # Process the 2 val files
+
+      - name: Run train.py (toy model with validation)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           source .venv-ci/bin/activate
           python train.py \
-            --memmap_file_train ./processed_data_ci/ci_prepared_data.memmap \
+            --memmap_file_train ./processed_data_ci/ci_train_data.memmap \
             --num_sequences_train 2 \
+            --memmap_file_val ./processed_data_ci/ci_val_data.memmap \
+            --num_sequences_val 2 \
             --tokenizer_name_or_path gpt2 \
             --dataset_max_length 32 \
             --dataset_dtype int32 \
@@ -87,22 +88,28 @@ jobs:
             --lora_rank 0 \
             --seed 42
 
-      # Step 7: Check if checkpoint files were created
-      # This verifies that the training process completed to the point of saving a checkpoint.
-      - name: Check for checkpoint files
+      - name: Check for checkpoint files (including best_model.pt)
         run: |
-          echo "Listing contents of checkpoint directory:"
+          echo "Listing contents of checkpoint directory: ./checkpoints_ci"
           ls -R ./checkpoints_ci
-          # Expected global_step = num_sequences_train / batch_size * num_epochs = 2 / 1 * 1 = 2
-          # Epoch is 0-indexed internally, so epoch+1 is 1 for the filename.
-          if [ ! -f ./checkpoints_ci/lunaris_codex_epoch-1_step-2.pt ]; then
-            echo "ERROR: Main checkpoint file 'lunaris_codex_epoch-1_step-2.pt' not found!"
+          
+          # With 1 epoch, 2 train examples, batch_size 1 -> 2 global steps for training.
+          # Epoch is 0-indexed internally for saving, so epoch 0 is completed.
+          # Filename becomes epoch-1_step-2.
+          MAIN_CKPT_FILE="./checkpoints_ci/lunaris_codex_epoch-1_step-2.pt"
+          BEST_MODEL_FILE="./checkpoints_ci/best_model.pt"
+
+          if [ ! -f "$MAIN_CKPT_FILE" ]; then
+            echo "ERROR: Main checkpoint file '$MAIN_CKPT_FILE' not found!"
             exit 1
+          else
+            echo "Main checkpoint file '$MAIN_CKPT_FILE' found."
           fi
-          if [ ! -f ./checkpoints_ci/best_model.pt ]; then
-            echo "ERROR: 'best_model.pt' not found!"
-            # This might be acceptable if no validation set was used or if the first epoch wasn't the "best"
-            # For a single epoch test with save_strategy epoch, best_model.pt should be created.
+
+          if [ ! -f "$BEST_MODEL_FILE" ]; then
+            echo "ERROR: 'best_model.pt' not found! Expected with validation and save_strategy=epoch."
             exit 1
+          else
+            echo "'best_model.pt' found."
           fi
-          echo "Checkpoint files seem to be created successfully."
+          echo "All expected checkpoint files found. CI test successful."
