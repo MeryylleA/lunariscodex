@@ -102,9 +102,24 @@ static inline void rtrim_inplace(std::string &s) { s.erase(std::find_if(s.rbegin
 static inline void trim_inplace(std::string &s) { ltrim_inplace(s); rtrim_inplace(s); }
 
 std::string reduce_internal_whitespaces(const std::string& input_str) {
-    std::string result; result.reserve(input_str.length()); bool last_was_space = false;
-    for (char c : input_str) { if (std::isspace(static_cast<unsigned char>(c))) { if (!last_was_space) { result += ' '; last_was_space = true; }} else { result += c; last_was_space = false; }}
-    if (result == " ") return ""; return result;
+    std::string result;
+    result.reserve(input_str.length());
+    bool last_was_space = false;
+    for (char c : input_str) {
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            if (!last_was_space) {
+                result += ' ';
+                last_was_space = true;
+            }
+        } else {
+            result += c;
+            last_was_space = false;
+        }
+    }
+    if (result == " ") { // Se a string original era só espaços, resultará em " "
+        return "";     // Retorna string vazia nesse caso
+    }
+    return result; // Caso contrário, retorna o resultado (que pode ser vazio se o input era vazio)
 }
 std::string apply_remove_non_printable(const std::string& s) {
     std::string result; result.reserve(s.length());
