@@ -65,7 +65,7 @@ jobs:
       # This tests the core training loop, model instantiation, and checkpointing.
       - name: Run train.py (toy model)
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }} # If tokenizer in train.py also needs it
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           source .venv-ci/bin/activate
           python train.py \
@@ -73,7 +73,7 @@ jobs:
             --num_sequences_train 2 \
             --tokenizer_name_or_path gpt2 \
             --dataset_max_length 32 \
-            --dataset_dtype int32 \ # Ensure this matches prepare_data.py output_dtype if changed
+            --dataset_dtype int32 \
             --model_max_seq_len 32 \
             --d_model 32 \
             --n_layers 1 \
@@ -83,8 +83,8 @@ jobs:
             --device cpu \
             --checkpoint_dir ./checkpoints_ci \
             --log_interval 1 \
-            --save_strategy epoch \ # Save at the end of the epoch
-            --lora_rank 0 \       # Test full model training for the toy model
+            --save_strategy epoch \
+            --lora_rank 0 \
             --seed 42
 
       # Step 7: Check if checkpoint files were created
