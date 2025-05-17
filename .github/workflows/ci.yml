@@ -69,7 +69,7 @@ jobs:
           cd data_analyzer 
           g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17
           ./lda_ci_executable \
-            --file ../processed_data_ci/ci_train_data.memmap \ # Adjusted path back to root
+            --file ../processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
             --max_length 32 \
             --dtype int32 \
