@@ -172,9 +172,9 @@ Key pages include:
 *   **[Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines)** (Guidance on data scale, hardware, and achieving good results)
 *   [Data Preparation Pipeline](https://github.com/MeryylleA/lunariscodex/wiki/Data-Preparation-Pipeline) (`prepare_data.py`)
 *   [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) (`train.py`)
-*   [Utility: Lunaris Text Cleaner](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Text-Cleaner)
-*   [Utility: Lunaris Data Analyzer](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Data-Analyzer)
-*   [Tutorial: Using the Lunaris-Data Dataset](https://github.com/MeryylleA/lunariscodex/wiki/Tutorial:-Using-the-Lunaris-Data-Dataset)
+*   [Utility: Lunaris Text Cleaner](https://github.com/MeryylleA/lunariscodex/wiki/Lunaris-Text-Cleaner)
+*   [Utility: Lunaris Data Analyzer](https://github.com/MeryylleA/lunariscodex/wiki/Lunaris-Data-Analyzer)
+*   [Tutorial: Using the Lunaris-Data Dataset](https://github.com/MeryylleA/lunariscodex/wiki/Using-the-Lunaris-Data-Dataset)
 
 ---
 
