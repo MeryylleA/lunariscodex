@@ -57,14 +57,13 @@ jobs:
       - name: Build and Run C++ Text Cleaner
         run: |
           echo "--- Building and Running lunaris_text_cleaner ---"
-          # Assuming text_cleaner source is in 'text_cleaner/' directory
           (cd text_cleaner && g++ lunaris_text_cleaner.cpp -o ltc_ci_executable -std=c++17)
           
           # Clean the raw training files into the directories prepare_data.py will use
           ./text_cleaner/ltc_ci_executable \
             --input ./temp_data_ci_raw \
-            --output ./temp_data_ci_train \ # Output cleaned files to where prepare_data expects train files
-            --input-pattern "*" \ # Clean all files in raw
+            --output ./temp_data_ci_train \ 
+            --input-pattern "*" \ 
             --recursive \
             --normalize-whitespace \
             --to-lowercase \
@@ -86,11 +85,11 @@ jobs:
           echo "--- Preparing Training Data (from cleaned files) for CI ---"
           python prepare_data.py \
             --data_source_type text_file_lines \
-            --dataset_name_or_path "./temp_data_ci_train/*" \ # Use cleaned files
+            --dataset_name_or_path "./temp_data_ci_train/*" \ 
             --tokenizer_name_or_path gpt2 \
             --max_length 32 \
             --output_path ./processed_data_ci/ci_train_data.memmap \
-            --max_examples 10 # Limit to avoid issues if many small files are created
+            --max_examples 10
 
           echo "--- Preparing Validation Data (raw) for CI ---"
           python prepare_data.py \
@@ -122,9 +121,9 @@ jobs:
           source .venv-ci/bin/activate
           python train.py \
             --memmap_file_train ./processed_data_ci/ci_train_data.memmap \
-            --num_sequences_train 2 \ # Must match what prepare_data_py actually created for train
+            --num_sequences_train 2 \ 
             --memmap_file_val ./processed_data_ci/ci_val_data.memmap \
-            --num_sequences_val 2 \ # Must match what prepare_data_py actually created for val
+            --num_sequences_val 2 \ 
             --tokenizer_name_or_path gpt2 \
             --dataset_max_length 32 \
             --dataset_dtype int32 \
