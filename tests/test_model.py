@@ -1,45 +1,59 @@
 # tests/test_model.py
 import torch
-import pytest # Você precisará de pytest instalado no seu ambiente de CI
+import pytest # pytest will be installed in the CI environment via requirements or direct pip install
 
-# Supondo que model.py está na raiz do projeto ou seu PYTHONPATH está configurado
-# Se model.py estiver na raiz, e você rodar pytest da raiz, isso deve funcionar.
-# Se não, você pode precisar ajustar o caminho de importação ou configurar o PYTHONPATH no CI.
-# Para simplicidade, vamos assumir que model.py é importável diretamente.
-from model import LunarisCodexConfig, LoRALinear
+# Assuming model.py is in the project root and PYTHONPATH is set correctly in CI,
+# or tests are run from the project root.
+from model import LunarisCodexConfig, LoRALinear 
+# If you add tests for SelfAttention, etc., import them here:
+# from model import SelfAttention, FeedForward, TransformerDecoderBlock, LunarisMind
 
 def test_lora_linear_initialization_and_shape():
     """
-    Tests basic initialization of LoRALinear and output shape.
+    Tests basic initialization of LoRALinear (with and without LoRA) 
+    and ensures the output shape is correct.
     """
     in_features = 128
     out_features = 256
     rank = 8
+    dummy_input = torch.randn(2, 10, in_features) # Batch, SeqLen, InFeatures
 
-    # Test with LoRA enabled
-    lora_layer_with_lora = LoRALinear(in_features, out_features, rank=rank, bias=False)
-    assert lora_layer_with_lora.has_lora, "LoRA should be enabled when rank > 0"
-    assert lora_layer_with_lora.lora_A.shape == (in_features, rank)
-    assert lora_layer_with_lora.lora_B.shape == (rank, out_features)
+    # Test 1: LoRA enabled (rank > 0)
+    lora_layer_enabled = LoRALinear(in_features, out_features, rank=rank, bias=False)
+    assert lora_layer_enabled.has_lora, "LoRA should be enabled when rank > 0"
+    assert lora_layer_enabled.lora_A.shape == (in_features, rank), "LoRA_A shape mismatch"
+    assert lora_layer_enabled.lora_B.shape == (rank, out_features), "LoRA_B shape mismatch"
+    
+    output_enabled = lora_layer_enabled(dummy_input)
+    assert output_enabled.shape == (2, 10, out_features), "Output shape mismatch when LoRA is enabled"
 
-    dummy_input = torch.randn(2, 10, in_features) # Batch, SeqLen, Features
-    output_with_lora = lora_layer_with_lora(dummy_input)
-    assert output_with_lora.shape == (2, 10, out_features), "Output shape mismatch with LoRA"
+    # Test 2: LoRA disabled (rank = 0)
+    lora_layer_disabled_rank_zero = LoRALinear(in_features, out_features, rank=0, bias=False)
+    assert not lora_layer_disabled_rank_zero.has_lora, "LoRA should be disabled when rank = 0"
+    
+    output_disabled_rank_zero = lora_layer_disabled_rank_zero(dummy_input)
+    assert output_disabled_rank_zero.shape == (2, 10, out_features), "Output shape mismatch when LoRA rank is 0"
 
-    # Test with LoRA disabled (rank=0)
-    lora_layer_no_lora = LoRALinear(in_features, out_features, rank=0, bias=False)
-    assert not lora_layer_no_lora.has_lora, "LoRA should be disabled when rank = 0"
+    # Test 3: LoRA disabled (rank = None)
+    lora_layer_disabled_rank_none = LoRALinear(in_features, out_features, rank=None, bias=False)
+    assert not lora_layer_disabled_rank_none.has_lora, "LoRA should be disabled when rank is None"
 
-    output_no_lora = lora_layer_no_lora(dummy_input)
-    assert output_no_lora.shape == (2, 10, out_features), "Output shape mismatch without LoRA"
+    output_disabled_rank_none = lora_layer_disabled_rank_none(dummy_input)
+    assert output_disabled_rank_none.shape == (2, 10, out_features), "Output shape mismatch when LoRA rank is None"
 
-    # Test with LoRA disabled (rank=None)
-    lora_layer_none_lora = LoRALinear(in_features, out_features, rank=None, bias=False)
-    assert not lora_layer_none_lora.has_lora, "LoRA should be disabled when rank is None"
-
-    output_none_lora = lora_layer_none_lora(dummy_input)
-    assert output_none_lora.shape == (2, 10, out_features), "Output shape mismatch with LoRA rank None"
-
-# Você pode adicionar mais testes aqui para outras partes do model.py
-# def test_another_component():
+# TODO: Add more tests for other components in model.py
+# For example:
+# def test_self_attention_initialization():
+#     pass
+#
+# def test_feed_forward_activations():
+#     pass
+#
+# def test_transformer_decoder_block_forward():
+#     pass
+#
+# def test_lunaris_mind_full_model_forward():
+#     pass
+#
+# def test_lunaris_mind_generate_simple():
 #     pass
