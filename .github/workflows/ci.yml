@@ -22,6 +22,14 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Install Python dependencies
         run: |
           python -m venv .venv-ci
@@ -54,12 +62,23 @@ jobs:
           echo "# Another validation line for diversity" > ./temp_data_ci_val/val_sample_2.py
           echo "Done creating dummy files."
 
+      - name: Cache C++ build for Text Cleaner
+        uses: actions/cache@v3
+        with:
+          path: ./text_cleaner/ltc_ci_executable
+          key: ${{ runner.os }}-text-cleaner-${{ hashFiles('text_cleaner/lunaris_text_cleaner.cpp') }}
+          restore-keys: |
+            ${{ runner.os }}-text-cleaner-
+
       - name: Build and Run C++ Text Cleaner
         run: |
           echo "--- Building and Running lunaris_text_cleaner ---"
-          (cd text_cleaner && g++ lunaris_text_cleaner.cpp -o ltc_ci_executable -std=c++17)
+          if [ ! -f ./text_cleaner/ltc_ci_executable ]; then
+            (cd text_cleaner && g++ lunaris_text_cleaner.cpp -o ltc_ci_executable -std=c++17)
+          else
+            echo "Using cached text_cleaner executable"
+          fi
           
-          # Define o comando em uma variável para facilitar o echo e a execução
           CLEANER_CMD="./text_cleaner/ltc_ci_executable \
             --input ./temp_data_ci_raw \
             --output ./temp_data_ci_train \
@@ -80,7 +99,7 @@ jobs:
 
       - name: Run prepare_data.py for CI datasets
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }} # In case tokenizer needs it
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           source .venv-ci/bin/activate
           echo "--- Preparing Training Data (from cleaned files) for CI ---"
@@ -101,14 +120,24 @@ jobs:
             --output_path ./processed_data_ci/ci_val_data.memmap \
             --max_examples 2
             
+      - name: Cache C++ build for Data Analyzer
+        uses: actions/cache@v3
+        with:
+          path: ./data_analyzer/lda_ci_executable
+          key: ${{ runner.os }}-data-analyzer-${{ hashFiles('data_analyzer/lunaris_data_analyzer.cpp') }}
+          restore-keys: |
+            ${{ runner.os }}-data-analyzer-
+
       - name: Build and Run C++ Data Analyzer
         run: |
           echo "--- Building and Running lunaris_data_analyzer ---"
-          # Build the analyzer in the data_analyzer directory
-          cd data_analyzer && g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17 -g || { echo "Compilation failed"; exit 1; }
-          cd ..
+          if [ ! -f ./data_analyzer/lda_ci_executable ]; then
+            cd data_analyzer && g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17 -g || { echo "Compilation failed"; exit 1; }
+            cd ..
+          else
+            echo "Using cached data_analyzer executable"
+          fi
           
-          # Adjusted max_length to 90 to reflect the actual file size (1152 bytes / (2 sequences * 4 bytes) = 90 tokens)
           DATA_ANALYZER_CMD="./data_analyzer/lda_ci_executable \
             --file ./processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
@@ -122,7 +151,7 @@ jobs:
 
       - name: Run train.py (toy model with validation)
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }} # In case tokenizer in train.py needs it
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           source .venv-ci/bin/activate
           python train.py \
@@ -151,7 +180,6 @@ jobs:
           echo "Listing contents of checkpoint directory: ./checkpoints_ci"
           ls -R ./checkpoints_ci
           
-          # Based on num_sequences_train = 2 and batch_size = 1, global_step will be 2.
           MAIN_CKPT_FILE="./checkpoints_ci/lunaris_codex_epoch-1_step-2.pt"
           BEST_MODEL_FILE="./checkpoints_ci/best_model.pt"
 
