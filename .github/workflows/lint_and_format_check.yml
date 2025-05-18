@@ -22,21 +22,26 @@ jobs:
 
       - name: Install Python dependencies and linters
         run: |
-          python -m venv .venv-lint
+          python -m venv .venv-lint # Nome do venv no CI
           source .venv-lint/bin/activate
           pip install --upgrade pip
           pip install flake8 black isort
-          # Se precisar de dependências do projeto para flake8 funcionar corretamente com imports:
+          # Se flake8 precisar das dependências do projeto para entender os imports:
           # pip install -r requirements.txt 
 
       - name: Run Python Linters and Formatters
         run: |
           source .venv-lint/bin/activate
+          
           echo "Running flake8..."
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics # Erros graves que quebram
-          flake8 . --count --exit-zero --max-complexity=12 --max-line-length=127 --statistics # Avisos
+          # Tentar com o exclude explícito no comando, além do .flake8
+          flake8 . --exclude=.git,__pycache__,.venv-lint,build,dist,*.egg-info,processed_*,checkpoints_*,temp_*,data_analyzer,text_cleaner,tests \
+                   --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 . --exclude=.git,__pycache__,.venv-lint,build,dist,*.egg-info,processed_*,checkpoints_*,temp_*,data_analyzer,text_cleaner,tests \
+                   --count --exit-zero --max-complexity=12 --max-line-length=127 --statistics
           
           echo "Checking formatting with black..."
+          # Black e isort geralmente respeitam bem o pyproject.toml
           black --check --diff .
           
           echo "Checking import order with isort..."
@@ -49,7 +54,8 @@ jobs:
       - name: Run C++ Formatting Check (clang-format)
         run: |
           echo "Checking C++ formatting with clang-format..."
-          # Encontra todos os arquivos .cpp e .h nos diretórios relevantes
-          # O -Werror faz o clang-format sair com erro se houver diferenças
+          # Certifique-se que .clang-format está na raiz ou especifique --style=file:<caminho>
+          # Ou use um estilo padrão: --style=Google ou --style=LLVM
+          # Este comando assume que .clang-format está na raiz e será pego automaticamente.
           find ./data_analyzer/ ./text_cleaner/ -iname '*.cpp' -o -iname '*.h' | xargs clang-format --dry-run -Werror
           echo "C++ formatting check complete."
