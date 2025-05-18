@@ -40,7 +40,6 @@ jobs:
       - name: Create dummy text file for Text Cleaner CI
         run: |
           mkdir -p ./temp_text_cleaner_ci_input
-          # This is the input text the cleaner will process
           cat <<EOF > ./temp_text_cleaner_ci_input/sample_for_cleaner.txt
           <!DOCTYPE html>
           <html> <head><title>Test</title></head> <body>
@@ -60,29 +59,27 @@ jobs:
         id: cache-text-cleaner
         uses: actions/cache@v3
         with:
-          path: ./text_cleaner/lunaris_text_cleaner_ci_executable
-          key: ${{ runner.os }}-text-cleaner-${{ hashFiles('text_cleaner/lunaris_text_cleaner.cpp') }}
+          path: ./text_cleaner/lunaris_text_cleaner_ci_executable 
+          # Key now includes Makefile if it influences the build (it does via flags, etc.)
+          # and the source file.
+          key: ${{ runner.os }}-text-cleaner-ci-${{ hashFiles('Makefile', 'text_cleaner/lunaris_text_cleaner.cpp') }}
           restore-keys: |
-            ${{ runner.os }}-text-cleaner-
+            ${{ runner.os }}-text-cleaner-ci-
 
-      - name: Build C++ Text Cleaner
+      - name: Build C++ Text Cleaner (using Makefile)
         if: steps.cache-text-cleaner.outputs.cache-hit != 'true'
         run: |
-          echo "Building Text Cleaner..."
-          cd text_cleaner
-          g++ lunaris_text_cleaner.cpp -o lunaris_text_cleaner_ci_executable -std=c++17 -O2 || { echo "Text Cleaner compilation failed"; exit 1; }
-          cd ..
+          echo "Building Text Cleaner for CI using Makefile..."
+          make text_cleaner_ci || { echo "Text Cleaner compilation failed"; exit 1; }
       
       # --- Run and Test Text Cleaner ---
+      # (Esta parte continua igual, pois depende do nome do executável _ci_executable)
       - name: Run and Test C++ Text Cleaner
         run: |
-          # Ensure executable exists
           if [ ! -f ./text_cleaner/lunaris_text_cleaner_ci_executable ]; then
             echo "ERROR: Text Cleaner executable not found after cache/build step!"
             exit 1
           fi
-
-          # Run the cleaner
           ./text_cleaner/lunaris_text_cleaner_ci_executable \
             --input ./temp_text_cleaner_ci_input/sample_for_cleaner.txt \
             --output ./temp_text_cleaner_ci_output/cleaned_sample.txt \
@@ -93,17 +90,10 @@ jobs:
             --process-urls --url-placeholder "[url]" \
             --process-emails --email-placeholder "[email]" \
             --remove-exact-duplicates || { echo "Text Cleaner execution failed"; exit 1; }
-
           echo "--- Cleaned Text Cleaner Output (from file) ---"
           ACTUAL_OUTPUT_FILE="./temp_text_cleaner_ci_output/cleaned_sample.txt"
           cat "$ACTUAL_OUTPUT_FILE"
           echo "--- End of Actual Output ---"
-          
-          # Define expected output using a here-string which is less prone to indent issues
-          # Make sure there are NO leading spaces on these lines in your YAML
-          # unless they are genuinely part of the expected output.
-          # Using <<-EOF allows leading tabs in the here-document to be stripped, but not spaces.
-          # So ensure no leading spaces.
           cat <<-EXPECTED_EOF > expected_output.txt
           test
           hello world!
@@ -111,29 +101,21 @@ jobs:
           url: [url] and email: [email]
           duplicate line
           EXPECTED_EOF
-          # The final newline from the last line of EXPECTED_EOF is preserved.
-          # If your tool's output does not have a final newline on the last line of content,
-          # you might need to adjust this or the comparison.
-
           echo "--- Expected Output (from here-doc) ---"
           cat expected_output.txt
           echo "--- End of Expected Output ---"
-
-          # Compare the actual output file with the expected output file
-          # The `diff` command will exit with 0 if files are same, non-zero otherwise.
-          # `-a` treats files as text. `-u` for unified diff format.
           echo "Comparing files..."
           if diff -a -u expected_output.txt "$ACTUAL_OUTPUT_FILE"; then
             echo "Text Cleaner output matches expected content."
           else
             echo "ERROR: Text Cleaner output does NOT match expected content. Diff shown above."
-            # The diff output itself will indicate the differences.
             exit 1
           fi
           rm expected_output.txt
 
       # --- Python Data Prep (Original Steps) ---
       - name: Create dummy datasets for Python CI
+        # ... (sem mudanças aqui) ...
         run: |
           mkdir -p ./temp_data_ci_train
           echo "def train_function_one(): return 'train1'" > ./temp_data_ci_train/train_sample_1.py
@@ -143,6 +125,7 @@ jobs:
           echo "# Another validation line" > ./temp_data_ci_val/val_sample_2.py
 
       - name: Run prepare_data.py for CI datasets
+        # ... (sem mudanças aqui) ...
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -154,7 +137,8 @@ jobs:
             --tokenizer_name_or_path gpt2 \
             --max_length 32 \
             --output_path ./processed_data_ci/ci_train_data.memmap \
-            --max_examples 2
+            --max_examples 2 \
+            --overwrite_output # Adicionado para consistência, se prepare_data.py suportar
 
           echo "--- Preparing Validation Data for CI ---"
           python prepare_data.py \
@@ -163,7 +147,8 @@ jobs:
             --tokenizer_name_or_path gpt2 \
             --max_length 32 \
             --output_path ./processed_data_ci/ci_val_data.memmap \
-            --max_examples 2
+            --max_examples 2 \
+            --overwrite_output # Adicionado para consistência
 
       # --- Data Analyzer (Original Steps) ---
       - name: Cache C++ build for Data Analyzer
@@ -171,38 +156,38 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ./data_analyzer/lda_ci_executable 
-          key: ${{ runner.os }}-data-analyzer-${{ hashFiles('data_analyzer/lunaris_data_analyzer.cpp') }}
+          key: ${{ runner.os }}-data-analyzer-ci-${{ hashFiles('Makefile', 'data_analyzer/lunaris_data_analyzer.cpp') }}
           restore-keys: |
-            ${{ runner.os }}-data-analyzer-
+            ${{ runner.os }}-data-analyzer-ci-
 
       - name: Build and Test C++ data analyzer
         run: |
+          # Build using Makefile if not cached
           if [ ! -f ./data_analyzer/lda_ci_executable ]; then
-            echo "Building Data Analyzer..."
-            cd data_analyzer
-            g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17 -O2 || { echo "Data Analyzer compilation failed"; exit 1; }
-            cd ..
+            echo "Building Data Analyzer for CI using Makefile..."
+            make data_analyzer_ci || { echo "Data Analyzer compilation failed"; exit 1; }
           else
-            echo "Using cached Data Analyzer executable or already built."
+            echo "Using cached Data Analyzer executable or already built for CI."
           fi
           
+          # Test (continua igual)
           if [ ! -f ./data_analyzer/lda_ci_executable ]; then
             echo "ERROR: Data Analyzer executable not found after cache/build step!"
             exit 1
           fi
-
           DATA_ANALYZER_CMD="./data_analyzer/lda_ci_executable \
             --file ./processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
             --max_length 32 \
             --dtype int32 \
+            --pad_id 0 \ # Adicionando o pad_id que o data_analyzer agora espera (0 é o default dele)
             --print_seq 1 \
             --top_n_tokens 3"
-          
           echo "Executing command: $DATA_ANALYZER_CMD"
           bash -c "$DATA_ANALYZER_CMD" || { echo "Analyzer execution failed"; exit 1; }
 
       # --- Python Training (Original Steps) ---
+      # ... (sem mudanças aqui) ...
       - name: Run train.py (toy model with validation)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -228,32 +213,29 @@ jobs:
             --save_strategy epoch \
             --lora_rank 0 \
             --seed 42
-
+            
       - name: Check for checkpoint files
+        # ... (sem mudanças aqui) ...
         run: |
           echo "Listing contents of checkpoint directory: ./checkpoints_ci"
           ls -R ./checkpoints_ci
-          
           MAIN_CKPT_FILE="./checkpoints_ci/lunaris_codex_epoch-1_step-2.pt"
           BEST_MODEL_FILE="./checkpoints_ci/best_model.pt"
-
-          if [ ! -f "$MAIN_CKPT_FILE" ]; then
-            echo "ERROR: Main checkpoint file '$MAIN_CKPT_FILE' not found!"
-            exit 1
-          fi
-          if [ ! -f "$BEST_MODEL_FILE" ]; then
-            echo "ERROR: 'best_model.pt' not found!"
-            exit 1
-          fi
+          if [ ! -f "$MAIN_CKPT_FILE" ]; then echo "ERROR: Main checkpoint file '$MAIN_CKPT_FILE' not found!"; exit 1; fi
+          if [ ! -f "$BEST_MODEL_FILE" ]; then echo "ERROR: 'best_model.pt' not found!"; exit 1; fi
           echo "All expected checkpoint files found. CI test successful."
 
       - name: Clean up
         if: always()
         run: |
+          # Use make clean para as ferramentas C++ se preferir, ou rm manual
+          make clean || echo "Make clean failed or no Makefile, continuing with manual rm..."
           rm -rf .venv-ci \
                  ./temp_data_ci_train ./temp_data_ci_val \
                  ./processed_data_ci ./checkpoints_ci \
-                 ./data_analyzer/lda_ci_executable \
                  ./temp_text_cleaner_ci_input ./temp_text_cleaner_ci_output \
-                 ./text_cleaner/lunaris_text_cleaner_ci_executable
+                 # Os executáveis já são removidos pelo 'make clean' se ele existir e funcionar
+                 # ./data_analyzer/lda_ci_executable \ # Removido se make clean funcionar
+                 # ./text_cleaner/lunaris_text_cleaner_ci_executable # Removido se make clean funcionar
+                 expected_output.txt # Limpa o arquivo de teste do diff
           echo "Cleaned up temporary files and directories."
