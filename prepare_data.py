@@ -105,8 +105,7 @@ def yield_examples_from_hf_dataset(
 
     # tqdm can be used with iterable datasets if the total number of examples is known or estimated.
     # For pure streaming without a total, tqdm won't show a progress bar but will count iterations.
-    desc = f"Iterating HF Dataset '{dataset_name_or_path}' ({split})"
-    # dataset_iterator = tqdm(dataset, desc=desc) if not streaming else dataset # tqdm is more useful for non-streaming
+    # dataset_iterator = tqdm(dataset, desc=f"Iterating HF Dataset '{dataset_name_or_path}' ({split})") if not streaming else dataset # tqdm is more useful for non-streaming
     dataset_iterator = dataset # Keep it simple for now
 
     for example_idx, example in enumerate(dataset_iterator):
