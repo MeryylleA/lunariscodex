@@ -1,7 +1,5 @@
-# .github/workflows/codeql-analysis.yml 
-# (Ou o nome que o GitHub gerou, ex: codeql.yml)
-
-name: "CodeQL Security Scan" # Nome mais descritivo
+# .github/workflows/codeql-analysis.yml
+name: "CodeQL Security Scan"
 
 on:
   push:
@@ -9,76 +7,69 @@ on:
   pull_request:
     branches: [ "main" ]
   schedule:
-    - cron: '30 5 * * 1' # Example: Run every Monday at 5:30 AM UTC
+    - cron: '30 5 * * 1' 
+  workflow_dispatch: # Permite rodar manualmente também
 
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ubuntu-latest # Simplificado, pois todas as suas linguagens rodam no Ubuntu
+    runs-on: ubuntu-latest
     
     permissions:
-      security-events: write # Required to upload CodeQL results
-      actions: read          # Required for private repos if using private actions, usually not for public
-      contents: read         # Required to checkout the code
-      packages: read         # Required to download CodeQL packs if not default
+      security-events: write
+      actions: read      
+      contents: read     
+      packages: read     
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - language: 'actions' # Analyze GitHub Actions workflows themselves
+          - language: 'actions'
             build-mode: 'none'
-          - language: 'c-cpp'   # Analyze your C++ code
-            build-mode: 'autobuild' # Attempt to automatically detect and build C++ code
-                                   # Change to 'manual' if autobuild fails for C++
-          - language: 'python'  # Analyze your Python code
-            build-mode: 'none'   # Python does not require a separate build step for CodeQL
+          - language: 'c-cpp'
+            build-mode: 'manual' # Changed to manual
+          - language: 'python'
+            build-mode: 'none'
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-
-    # Optional: Setup steps for specific languages if autobuild fails
-    # Example: If C++ autobuild fails, you might need to install a specific compiler version here
-    # - name: Setup C++ compiler (if needed for manual build)
-    #   if: matrix.language == 'c-cpp' && matrix.build-mode == 'manual'
-    #   run: |
-    #     sudo apt-get update
-    #     sudo apt-get install -y g++-XX # Replace XX with your required version
 
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v3
       with:
         languages: ${{ matrix.language }}
         build-mode: ${{ matrix.build-mode }}
-        # Using default queries + security-and-quality for a good balance.
-        # Add '+' to include default queries along with the specified ones.
         queries: +security-and-quality
-        # For advanced customization, you can use a config file:
-        # config-file: ./.github/codeql/codeql-config.yml
 
-    # Autobuild attempts to build any compiled languages (like C++).
-    # If it fails for C++, you'll need to switch 'c-cpp' build-mode to 'manual'
-    # in the matrix above and provide your build commands in the step below.
+    # Manual build step for C++
     - if: matrix.language == 'c-cpp' && matrix.build-mode == 'manual'
-      name: Manual C++ build (if autobuild failed)
+      name: Manual C++ build for CodeQL
       shell: bash
       run: |
-        echo "Attempting manual C++ build for CodeQL..."
-        echo "Current directory: $(pwd)"
-        # Example: Compile your C++ tools
-        # Adjust paths and output names as per your project structure
+        echo "Running manual C++ build for CodeQL analysis..."
+        echo "Working directory: $(pwd)"
+        echo "Listing contents of data_analyzer:"
+        ls -la data_analyzer || echo "data_analyzer directory not found or empty"
+        echo "Listing contents of data_analyzer/text_cleaner:"
+        ls -la data_analyzer/text_cleaner || echo "data_analyzer/text_cleaner directory not found or empty"
+
+        # Ensure output directories for executables exist if needed by the -o path
+        # If -o just specifies a name, it's created in the current dir of the g++ command.
+        # Assuming your .cpp files are in these locations relative to the repo root:
+        # data_analyzer/lunaris_data_analyzer.cpp
+        # data_analyzer/text_cleaner/lunaris_text_cleaner.cpp
+
         echo "Compiling lunaris_data_analyzer..."
-        g++ data_analyzer/lunaris_data_analyzer.cpp -o data_analyzer/lda_executable -std=c++17 -g
+        # Compile from data_analyzer directory, output there
+        (cd data_analyzer && g++ lunaris_data_analyzer.cpp -o lda_ql_build -std=c++17 -g)
         
         echo "Compiling lunaris_text_cleaner..."
-        g++ data_analyzer/text_cleaner/lunaris_text_cleaner.cpp -o data_analyzer/text_cleaner/ltc_executable -std=c++17 -g
+        # Compile from data_analyzer/text_cleaner directory, output there
+        (cd data_analyzer/text_cleaner && g++ lunaris_text_cleaner.cpp -o ltc_ql_build -std=c++17 -g)
         
         echo "Manual C++ build commands completed."
-        # IMPORTANT: Do NOT 'exit 1' here if you provide actual build commands,
-        # unless you want the build to fail if these commands themselves fail.
-        # The original 'exit 1' was a placeholder to force failure if manual was chosen
-        # without providing commands.
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
