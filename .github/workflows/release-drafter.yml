@@ -1,0 +1,21 @@
+name: Release Drafter
+
+on:
+  push:
+    branches:
+      - main # Roda quando algo é mergeado no main
+  # Opcional: rodar também quando PRs são fechados/mergeados
+  # pull_request:
+  #   types: [closed] 
+
+jobs:
+  update_release_draft:
+    runs-on: ubuntu-latest
+    steps:
+      # Drafts your next Release notes as Pull Requests are merged into "main"
+      - uses: release-drafter/release-drafter@v6 # Usando a v6 que é a mais recente estável
+        # (Optional)Specify config name to use, relative to .github/
+        # with:
+        #   config-name: release-drafter-config.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
