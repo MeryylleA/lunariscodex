@@ -1,0 +1,55 @@
+name: Lint and Format Check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  lint-format:
+    name: Run Linters and Format Checkers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies and linters
+        run: |
+          python -m venv .venv-lint
+          source .venv-lint/bin/activate
+          pip install --upgrade pip
+          pip install flake8 black isort
+          # Se precisar de dependências do projeto para flake8 funcionar corretamente com imports:
+          # pip install -r requirements.txt 
+
+      - name: Run Python Linters and Formatters
+        run: |
+          source .venv-lint/bin/activate
+          echo "Running flake8..."
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics # Erros graves que quebram
+          flake8 . --count --exit-zero --max-complexity=12 --max-line-length=127 --statistics # Avisos
+          
+          echo "Checking formatting with black..."
+          black --check --diff .
+          
+          echo "Checking import order with isort..."
+          isort --check-only --diff .
+
+      - name: Setup C++ Formatting Check (clang-format)
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang-format
+          
+      - name: Run C++ Formatting Check (clang-format)
+        run: |
+          echo "Checking C++ formatting with clang-format..."
+          # Encontra todos os arquivos .cpp e .h nos diretórios relevantes
+          # O -Werror faz o clang-format sair com erro se houver diferenças
+          find ./data_analyzer/ ./text_cleaner/ -iname '*.cpp' -o -iname '*.h' | xargs clang-format --dry-run -Werror
+          echo "C++ formatting check complete."
