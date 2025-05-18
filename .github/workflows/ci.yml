@@ -76,7 +76,7 @@ jobs:
 
       # --- Run and Test Text Cleaner ---
       - name: Run and Test C++ Text Cleaner
-        run: |
+        run: | # Use o literal block scalar aqui
           # Ensure executable exists (either from cache or build)
           if [ ! -f ./text_cleaner/lunaris_text_cleaner_ci_executable ]; then
             echo "ERROR: Text Cleaner executable not found after cache/build step!"
@@ -95,33 +95,45 @@ jobs:
             --remove-exact-duplicates || { echo "Text Cleaner execution failed"; exit 1; }
 
           echo "--- Cleaned Text Cleaner Output ---"
-          cat ./temp_text_cleaner_ci_output/cleaned_sample.txt
+          ACTUAL_OUTPUT_FILE="./temp_text_cleaner_ci_output/cleaned_sample.txt"
+          cat "$ACTUAL_OUTPUT_FILE"
           
-          # Define expected output (adjust based on exact cleaner behavior)
-          # This is a simplified check. For robust checks, compare against a golden file.
-          EXPECTED_CONTENT="hello world!
-another line.
-url: [URL] and email: [EMAIL]
-duplicate line"
+          # Define expected output
+          # Certifique-se de que esta string está EXATAMENTE como o output esperado,
+          # incluindo newlines. O awk 'NF' abaixo ajuda a normalizar, mas é bom ter isso certo.
+          read -r -d '' EXPECTED_CONTENT <<EOF
+          hello world!
+          another line.
+          url: [URL] and email: [EMAIL]
+          duplicate line
+          EOF
+          # O read -r -d '' VAR <<EOF ... EOF é uma forma robusta de criar strings multi-linha no shell.
 
-          # Normalize actual output for comparison (e.g. remove potential trailing newline from cat/file)
-          ACTUAL_CONTENT=$(cat ./temp_text_cleaner_ci_output/cleaned_sample.txt | awk 'NF' | tr -d '\r')
-          # awk 'NF' removes empty lines that might be left by cat, tr -d '\r' removes carriage returns for windows/unix diffs
-
-          # Prepare expected content similarly (remove newlines for direct string comparison)
-          # This is a very strict comparison.
+          # Normalize actual output for comparison
+          # Remove linhas completamente vazias e \r
+          NORMALIZED_ACTUAL_CONTENT=$(awk 'NF' "$ACTUAL_OUTPUT_FILE" | tr -d '\r')
+          
+          # Normalize expected content
           NORMALIZED_EXPECTED_CONTENT=$(echo "$EXPECTED_CONTENT" | awk 'NF' | tr -d '\r')
-          NORMALIZED_ACTUAL_CONTENT=$(echo "$ACTUAL_CONTENT" | awk 'NF' | tr -d '\r')
 
+          echo "--- Comparing Content ---"
+          echo "Normalized Expected:"
+          echo "$NORMALIZED_EXPECTED_CONTENT"
+          echo "Normalized Actual:"
+          echo "$NORMALIZED_ACTUAL_CONTENT"
+          echo "-----------------------"
 
           if [ "$NORMALIZED_ACTUAL_CONTENT" = "$NORMALIZED_EXPECTED_CONTENT" ]; then
             echo "Text Cleaner output matches expected content."
           else
             echo "ERROR: Text Cleaner output does NOT match expected content."
-            echo "Expected:"
-            echo "$EXPECTED_CONTENT"
-            echo "Got:"
-            echo "$ACTUAL_CONTENT" # Print the non-normalized actual content for better diff viewing
+            # Para um diff melhor no log do CI, podemos usar o comando diff
+            echo "Diff:"
+            # Criar arquivos temporários para diff é mais confiável
+            echo "$EXPECTED_CONTENT" > expected.txt
+            # O ACTUAL_CONTENT para diff deve ser o não normalizado para refletir o arquivo real
+            diff -u expected.txt "$ACTUAL_OUTPUT_FILE" || true # o '|| true' evita que o diff falhe o script se houver diferenças
+            rm expected.txt
             exit 1
           fi
 
