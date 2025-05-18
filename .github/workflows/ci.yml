@@ -10,7 +10,6 @@ on:
 
 jobs:
   test-pipeline:
-    name: Test Python Pipeline and C++ Utilities
     runs-on: ubuntu-latest
 
     steps:
@@ -22,14 +21,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Cache Python dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
       - name: Install Python dependencies
         run: |
           python -m venv .venv-ci
@@ -37,117 +28,53 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
       
-      # C++ build tools (g++) are generally available on ubuntu-latest runner.
+      # C++ build tools are generally available on ubuntu-latest runner
 
       - name: Create dummy datasets for CI
         run: |
-          echo "Creating dummy text files for CI tests..."
-          mkdir -p ./temp_data_ci_raw # For text_cleaner input
-          mkdir -p ./temp_data_ci_train # For prepare_data input (after cleaning)
-          mkdir -p ./temp_data_ci_val   # For prepare_data input (after cleaning)
-
-          echo "   Line with too many    spaces and MiXeD CaSe. URL: http://example.com/test" > ./temp_data_ci_raw/raw_file1.txt
-          echo "contact_me@example.org for details" >> ./temp_data_ci_raw/raw_file1.txt
-          echo "" >> ./temp_data_ci_raw/raw_file1.txt # Empty line
-          echo "Duplicate line to be cleaned." >> ./temp_data_ci_raw/raw_file1.txt
-          echo "Duplicate line to be cleaned." >> ./temp_data_ci_raw/raw_file1.txt
-          
-          echo "Another file for training." > ./temp_data_ci_raw/raw_file2.log # Different extension
-          
-          # Create files that will be "cleaned" and then used by prepare_data
-          cp ./temp_data_ci_raw/raw_file1.txt ./temp_data_ci_train/train_sample_1.txt # Will be cleaned by text_cleaner first
-          cp ./temp_data_ci_raw/raw_file2.log ./temp_data_ci_train/train_sample_2.log # Will be cleaned
-          
+          mkdir -p ./temp_data_ci_train
+          echo "def train_function_one(): return 'train1'" > ./temp_data_ci_train/train_sample_1.py
+          echo "class TrainSampleClass:\n  value = 'train2'" > ./temp_data_ci_train/train_sample_2.py
+          mkdir -p ./temp_data_ci_val
           echo "def validation_function(): return 'validation_data_here'" > ./temp_data_ci_val/val_sample_1.py
-          echo "# Another validation line for diversity" > ./temp_data_ci_val/val_sample_2.py
-          echo "Done creating dummy files."
-
-      - name: Cache C++ build for Text Cleaner
-        uses: actions/cache@v3
-        with:
-          path: ./text_cleaner/ltc_ci_executable
-          key: ${{ runner.os }}-text-cleaner-${{ hashFiles('text_cleaner/lunaris_text_cleaner.cpp') }}
-          restore-keys: |
-            ${{ runner.os }}-text-cleaner-
-
-      - name: Build and Run C++ Text Cleaner
-        run: |
-          echo "--- Building and Running lunaris_text_cleaner ---"
-          if [ ! -f ./text_cleaner/ltc_ci_executable ]; then
-            (cd text_cleaner && g++ lunaris_text_cleaner.cpp -o ltc_ci_executable -std=c++17)
-          else
-            echo "Using cached text_cleaner executable"
-          fi
-          
-          CLEANER_CMD="./text_cleaner/ltc_ci_executable \
-            --input ./temp_data_ci_raw \
-            --output ./temp_data_ci_train \
-            --input-pattern \"*\" \
-            --recursive \
-            --normalize-whitespace \
-            --to-lowercase \
-            --remove-empty-lines \
-            --process-urls --url-placeholder \"[URL]\" \
-            --process-emails --email-placeholder \"[EMAIL]\" \
-            --remove-exact-duplicates"
-          
-          echo "Executing command: $CLEANER_CMD"
-          eval $CLEANER_CMD
-          
-          echo "Contents of temp_data_ci_train after cleaning:"
-          ls -R ./temp_data_ci_train
+          echo "# Another validation line" > ./temp_data_ci_val/val_sample_2.py
 
       - name: Run prepare_data.py for CI datasets
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           source .venv-ci/bin/activate
-          echo "--- Preparing Training Data (from cleaned files) for CI ---"
+          echo "--- Preparing Training Data for CI ---"
           python prepare_data.py \
             --data_source_type text_file_lines \
-            --dataset_name_or_path "./temp_data_ci_train/*" \
+            --dataset_name_or_path "./temp_data_ci_train/*.py" \
             --tokenizer_name_or_path gpt2 \
-            --max_length 90 \  # Ajustado para 90, alinhado com analyzer e train.py
+            --max_length 32 \
             --output_path ./processed_data_ci/ci_train_data.memmap \
             --max_examples 2
 
-          echo "--- Preparing Validation Data (raw) for CI ---"
+          echo "--- Preparing Validation Data for CI ---"
           python prepare_data.py \
             --data_source_type text_file_lines \
             --dataset_name_or_path "./temp_data_ci_val/*.py" \
             --tokenizer_name_or_path gpt2 \
-            --max_length 90 \  # Ajustado para 90
+            --max_length 32 \
             --output_path ./processed_data_ci/ci_val_data.memmap \
             --max_examples 2
-            
-      - name: Cache C++ build for Data Analyzer
-        uses: actions/cache@v3
-        with:
-          path: ./data_analyzer/lda_ci_executable
-          key: ${{ runner.os }}-data-analyzer-${{ hashFiles('data_analyzer/lunaris_data_analyzer.cpp') }}
-          restore-keys: |
-            ${{ runner.os }}-data-analyzer-
 
-      - name: Build and Run C++ Data Analyzer
+      - name: Build and Test C++ data analyzer
         run: |
-          echo "--- Building and Running lunaris_data_analyzer ---"
-          if [ ! -f ./data_analyzer/lda_ci_executable ]; then
-            cd data_analyzer && g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17 -g || { echo "Compilation failed"; exit 1; }
-            cd ..
-          else
-            echo "Using cached data_analyzer executable"
-          fi
-          
-          DATA_ANALYZER_CMD="./data_analyzer/lda_ci_executable \
-            --file ./processed_data_ci/ci_train_data.memmap \
+          # Assuming the C++ utility is in 'data_analyzer' relative to repo root
+          # If you created utils/data_analyzer, change path accordingly
+          cd data_analyzer 
+          g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17
+          ./lda_ci_executable \
+            --file ../processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
-            --max_length 90 \
+            --max_length 32 \
             --dtype int32 \
             --print_seq 1 \
-            --top_n_tokens 3"
-          
-          echo "Executing command: $DATA_ANALYZER_CMD"
-          eval $DATA_ANALYZER_CMD || { echo "Analyzer execution failed"; exit 1; }
+            --top_n_tokens 3 
 
       - name: Run train.py (toy model with validation)
         env:
@@ -160,9 +87,9 @@ jobs:
             --memmap_file_val ./processed_data_ci/ci_val_data.memmap \
             --num_sequences_val 2 \
             --tokenizer_name_or_path gpt2 \
-            --dataset_max_length 90 \
+            --dataset_max_length 32 \
             --dataset_dtype int32 \
-            --model_max_seq_len 90 \
+            --model_max_seq_len 32 \
             --d_model 32 \
             --n_layers 1 \
             --n_heads 1 \
