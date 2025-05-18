@@ -4,11 +4,11 @@
 
 # Lunaris Codex
 
-**Lunaris Codex** is a highly flexible and customizable Transformer Decoder architecture designed for code generation and language modeling. Written entirely in PyTorch, it features state-of-the-art optimization techniques and includes modern components like LoRA, ALiBi, optional FlashAttention, and a comprehensive training, data processing, and inference pipeline.
+**Lunaris Codex** is a highly flexible and customizable Transformer Decoder architecture designed for code generation and language modeling. Written entirely in PyTorch, it features state-of-the-art components and a complete pipeline for data preparation, training, and inference.
 
-Our goal is to provide a clean, understandable, and powerful codebase that serves as an excellent starting point for researchers, students, and developers interested in building, training, and experimenting with advanced decoder-only models.
+Our goal is to provide a clean, understandable, and powerful codebase that serves as an excellent starting point for researchers, students, and developers interested in building, training, and experimenting with modern language models.
 
-> **Note:** This project focuses on delivering a robust, well-tested architecture and a complete toolkit for training, data processing, and inference. While we aspire to release large-scale pretrained weights in the future, our current emphasis is on providing a high-quality framework and empowering users to train their own models. For guidance on dataset sizes, hardware considerations, and achieving good performance, please refer to our **[[Dataset and Training Guidelines]]** on the Wiki.
+> **Note:** This project focuses on delivering a robust, well-tested architecture and a complete toolkit for training, data processing, and inference. While we aspire to release large-scale pretrained models, the main value here is the code, documentation, and reproducible pipeline.
 
 ---
 
@@ -75,7 +75,7 @@ Lunaris Codex implements a standard decoder-only Transformer architecture with s
 
 ## Getting Started
 
-This section outlines the basic steps to get Lunaris Codex up and running. Note that training effective Large Language Models typically requires substantial datasets and computational resources. Please see our **[[Dataset and Training Guidelines]]** on the Wiki for more details on scaling your training efforts.
+This section outlines the basic steps to get Lunaris Codex up and running. Note that training effective Large Language Models typically requires substantial datasets and computational resources. Please refer to the wiki for detailed guides.
 
 For more detailed guides and tutorials on each step, please refer to the **[Project Wiki](https://github.com/MeryylleA/lunariscodex/wiki)**.
 
@@ -103,7 +103,7 @@ For more detailed guides and tutorials on each step, please refer to the **[Proj
 
 ### 2. Data Preparation (`prepare_data.py`)
 
-Prepare your dataset for training. While the example uses a sample of [Lunaris-Data](https://huggingface.co/datasets/meryyllebr543/lunaris-data), effective pre-training often requires datasets with billions of tokens.
+Prepare your dataset for training. While the example uses a sample of [Lunaris-Data](https://huggingface.co/datasets/meryyllebr543/lunaris-data), effective pre-training often requires datasets with millions of examples.
 
 **Example: Preparing a sample of Lunaris-Data:**
 ```bash
@@ -121,11 +121,11 @@ python prepare_data.py \
     --max_examples 1000 \
     --overwrite_output
 ```
-*For detailed usage, see the [[Data Preparation Pipeline]] page on our Wiki or run `python prepare_data.py --help`.*
+*For detailed usage, see the [Data Preparation Pipeline](https://github.com/MeryylleA/lunariscodex/wiki/Data-Preparation-Pipeline) page on our Wiki or run `python prepare_data.py --help`.*
 
 ### 3. Training (`train.py`)
 
-Train your Lunaris Codex model. The example below is for a small model; refer to our [[Dataset and Training Guidelines]] on the Wiki for information on training larger models.
+Train your Lunaris Codex model. The example below is for a small model; refer to our [Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines) on the Wiki for information on training larger models.
 
 **Example: Training a small test model on CPU with LoRA:**
 ```bash
@@ -141,7 +141,7 @@ python train.py \
     --device cpu \
     --checkpoint_dir ./checkpoints_tutorial
 ```
-*For full training options, see the [[Command-Line Arguments for Training]] page on our Wiki or run `python train.py --help`.*
+*For full training options, see the [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) page on our Wiki or run `python train.py --help`.*
 
 ### 4. Running Inference (`inference.py` v0.2.0)
 
@@ -167,14 +167,14 @@ Helper tools for data analysis and text cleaning are available in `data_analyzer
 
 ## Documentation & Wiki
 
-For in-depth information, tutorials, and advanced guides, please visit the **[Lunaris Codex Project Wiki](https://github.com/MeryylleA/lunariscodex/wiki)**.
+For in-depth information, tutorials, and advanced guides, please visit the **[Lunaris Codex Project Wiki](https://github.com/MeryylleA/lunariscodex/wiki)**.  
 Key pages include:
-*   **[[Dataset and Training Guidelines]]** (Guidance on data scale, hardware, and achieving good results)
-*   [[Data Preparation Pipeline]] (`prepare_data.py`)
-*   [[Command-Line Arguments for Training]] (`train.py`)
-*   [[Utility: Lunaris Text Cleaner]]
-*   [[Utility: Lunaris Data Analyzer]]
-*   [[Tutorial: Using the Lunaris-Data Dataset]]
+*   **[Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines)** (Guidance on data scale, hardware, and achieving good results)
+*   [Data Preparation Pipeline](https://github.com/MeryylleA/lunariscodex/wiki/Data-Preparation-Pipeline) (`prepare_data.py`)
+*   [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) (`train.py`)
+*   [Utility: Lunaris Text Cleaner](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Text-Cleaner)
+*   [Utility: Lunaris Data Analyzer](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Data-Analyzer)
+*   [Tutorial: Using the Lunaris-Data Dataset](https://github.com/MeryylleA/lunariscodex/wiki/Tutorial:-Using-the-Lunaris-Data-Dataset)
 
 ---
 
@@ -182,7 +182,7 @@ Key pages include:
 
 Our current focus and future plans include:
 *   Further enhancing `inference.py` with features like interactive mode, batch generation, improved visual output, and advanced sampling techniques.
-*   Expanding documentation: advanced tutorials, API reference, and more details for the **[[Dataset and Training Guidelines]]**.
+*   Expanding documentation: advanced tutorials, API reference, and more details for the **[Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines)**.
 *   **Providing pre-tokenized versions of common public datasets or robust scripts to process them efficiently.**
 *   Example configurations for training on large-scale datasets like SlimPajama or The Stack.
 *   Benchmarking performance and generation quality across different model sizes and hardware.
@@ -204,7 +204,7 @@ See [`LICENSE`](LICENSE) for more details.
 
 Developed by **Francisco Antonio** ([@MeryylleA](https://github.com/MeryylleA) on GitHub, [@Meryylle](https://x.com/a93918) on X/Twitter).
 
-Lunaris Codex is an open-source endeavor. Contributions, feedback, bug reports, and feature requests are highly encouraged! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) guidelines and join our community discussions (https://discord.gg/JNsfzEwMtC).
+Lunaris Codex is an open-source endeavor. Contributions, feedback, bug reports, and feature requests are highly encouraged! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) guidelines and join our community. (https://discord.gg/JNsfzEwMtC)
 
 Let's build something amazing together!
 
