@@ -21,6 +21,14 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Install Python dependencies
         run: |
           python -m venv .venv-ci
@@ -62,19 +70,34 @@ jobs:
             --output_path ./processed_data_ci/ci_val_data.memmap \
             --max_examples 2
 
+      - name: Cache C++ build for Data Analyzer
+        uses: actions/cache@v3
+        with:
+          path: ./data_analyzer/lda_ci_executable
+          key: ${{ runner.os }}-data-analyzer-${{ hashFiles('data_analyzer/lunaris_data_analyzer.cpp') }}
+          restore-keys: |
+            ${{ runner.os }}-data-analyzer-
+
       - name: Build and Test C++ data analyzer
         run: |
-          # Assuming the C++ utility is in 'data_analyzer' relative to repo root
-          # If you created utils/data_analyzer, change path accordingly
-          cd data_analyzer 
-          g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17
-          ./lda_ci_executable \
-            --file ../processed_data_ci/ci_train_data.memmap \
+          if [ ! -f ./data_analyzer/lda_ci_executable ]; then
+            cd data_analyzer
+            g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17 || { echo "Compilation failed"; exit 1; }
+            cd ..
+          else
+            echo "Using cached data_analyzer executable"
+          fi
+          
+          DATA_ANALYZER_CMD="./data_analyzer/lda_ci_executable \
+            --file ./processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
             --max_length 32 \
             --dtype int32 \
             --print_seq 1 \
-            --top_n_tokens 3 
+            --top_n_tokens 3"
+          
+          echo "Executing command: $DATA_ANALYZER_CMD"
+          eval $DATA_ANALYZER_CMD || { echo "Analyzer execution failed"; exit 1; }
 
       - name: Run train.py (toy model with validation)
         env:
@@ -124,3 +147,9 @@ jobs:
             echo "'best_model.pt' found."
           fi
           echo "All expected checkpoint files found. CI test successful."
+
+      - name: Clean up
+        if: always()
+        run: |
+          rm -rf .venv-ci ./temp_data_ci_train ./temp_data_ci_val ./processed_data_ci ./checkpoints_ci ./data_analyzer/lda_ci_executable
+          echo "Cleaned up temporary files and directories."
