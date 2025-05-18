@@ -21,10 +21,10 @@ CXXFLAGS_MODE ?= RELEASE
 
 ifeq ($(CXXFLAGS_MODE),DEBUG)
     CURRENT_CXXFLAGS := $(CXXFLAGS_DEBUG)
-    BUILD_TYPE_MSG := "Debug build" # Sem parênteses
+    BUILD_TYPE_MSG := "Debug build"
 else
     CURRENT_CXXFLAGS := $(CXXFLAGS_RELEASE)
-    BUILD_TYPE_MSG := "Release build (Default)" # Sem parênteses
+    BUILD_TYPE_MSG := "Release build - Default" # CORRIGIDO: Removido parênteses
 endif
 
 # --- Text Cleaner ---
