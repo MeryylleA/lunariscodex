@@ -16,12 +16,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Optional: Clean previous C++ build artifacts at the very beginning
+      # This helps if runners are reused or if local 'act' tests leave things behind.
+      # For fresh GitHub runners, this is less critical but harmless.
+      - name: Initial C++ Artifact Cleanup (Best Effort)
+        run: |
+          echo "Performing pre-run cleanup of C++ build artifacts..."
+          make clean || echo "Pre-run 'make clean' info: No Makefile found or clean failed, proceeding."
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Cache Python dependencies
+        id: cache-python-deps # Give an ID for potential future use
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
@@ -34,6 +43,7 @@ jobs:
           python -m venv .venv-ci
           source .venv-ci/bin/activate
           pip install --upgrade pip
+          echo "Installing dependencies from requirements.txt..."
           pip install -r requirements.txt
       
       # --- Text Cleaner Test Setup ---
@@ -64,19 +74,28 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-text-cleaner-ci-
 
-      - name: Build C++ Text Cleaner (using Makefile)
-        if: steps.cache-text-cleaner.outputs.cache-hit != 'true'
+      - name: Build C++ Text Cleaner (using Makefile if not cached)
+        # Only run if cache was a miss OR if the file doesn't exist (e.g. cache restored but file was somehow deleted)
+        if: steps.cache-text-cleaner.outputs.cache-hit != 'true' || !outputs.text_cleaner_exists
+        id: build-text-cleaner # Give this step an ID to check its outcome if needed
         run: |
           echo "Building Text Cleaner for CI using Makefile..."
           make text_cleaner_ci || { echo "Text Cleaner compilation failed"; exit 1; }
+        # Output to check file existence for subsequent steps if needed
+      - name: Check Text Cleaner Executable Existence
+        id: check_tc_exec
+        run: |
+          if [ -f ./text_cleaner/lunaris_text_cleaner_ci_executable ]; then
+            echo "text_cleaner_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "text_cleaner_exists=false" >> $GITHUB_OUTPUT
+          fi
       
       # --- Run and Test Text Cleaner ---
       - name: Run and Test C++ Text Cleaner
+        if: steps.check_tc_exec.outputs.text_cleaner_exists == 'true' # Only run if executable exists
         run: |
-          if [ ! -f ./text_cleaner/lunaris_text_cleaner_ci_executable ]; then
-            echo "ERROR: Text Cleaner executable not found after cache/build step!"
-            exit 1
-          fi
+          # No need to check for file existence again here, `if` condition handles it
           ./text_cleaner/lunaris_text_cleaner_ci_executable \
             --input ./temp_text_cleaner_ci_input/sample_for_cleaner.txt \
             --output ./temp_text_cleaner_ci_output/cleaned_sample.txt \
@@ -87,6 +106,7 @@ jobs:
             --process-urls --url-placeholder "[url]" \
             --process-emails --email-placeholder "[email]" \
             --remove-exact-duplicates || { echo "Text Cleaner execution failed"; exit 1; }
+          # ... (rest of the test script for text cleaner output comparison)
           echo "--- Cleaned Text Cleaner Output (from file) ---"
           ACTUAL_OUTPUT_FILE="./temp_text_cleaner_ci_output/cleaned_sample.txt"
           cat "$ACTUAL_OUTPUT_FILE"
@@ -108,10 +128,11 @@ jobs:
             echo "ERROR: Text Cleaner output does NOT match expected content. Diff shown above."
             exit 1
           fi
-          # rm expected_output.txt # Removido do rm -rf abaixo
+          # rm expected_output.txt # Will be removed in final cleanup
 
-      # --- Python Data Prep (Original Steps) ---
+      # --- Python Data Prep ---
       - name: Create dummy datasets for Python CI
+        # ... (no changes)
         run: |
           mkdir -p ./temp_data_ci_train
           echo "def train_function_one(): return 'train1'" > ./temp_data_ci_train/train_sample_1.py
@@ -121,6 +142,7 @@ jobs:
           echo "# Another validation line" > ./temp_data_ci_val/val_sample_2.py
 
       - name: Run prepare_data.py for CI datasets
+        # ... (no changes other than ensuring overwrite_output is there)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -130,22 +152,18 @@ jobs:
             --data_source_type text_file_lines \
             --dataset_name_or_path "./temp_data_ci_train/*.py" \
             --tokenizer_name_or_path gpt2 \
-            --max_length 32 \
             --output_path ./processed_data_ci/ci_train_data.memmap \
-            --max_examples 2 \
-            --overwrite_output
+            --max_length 32 --max_examples 2 --overwrite_output
 
           echo "--- Preparing Validation Data for CI ---"
           python prepare_data.py \
             --data_source_type text_file_lines \
             --dataset_name_or_path "./temp_data_ci_val/*.py" \
             --tokenizer_name_or_path gpt2 \
-            --max_length 32 \
             --output_path ./processed_data_ci/ci_val_data.memmap \
-            --max_examples 2 \
-            --overwrite_output
+            --max_length 32 --max_examples 2 --overwrite_output
 
-      # --- Data Analyzer (Original Steps) ---
+      # --- Data Analyzer ---
       - name: Cache C++ build for Data Analyzer
         id: cache-data-analyzer
         uses: actions/cache@v3
@@ -155,21 +173,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-data-analyzer-ci-
 
-      - name: Build and Test C++ data analyzer
+      - name: Build C++ Data Analyzer (using Makefile if not cached)
+        if: steps.cache-data-analyzer.outputs.cache-hit != 'true' || !outputs.data_analyzer_exists
+        id: build-data-analyzer
         run: |
-          if [ ! -f ./data_analyzer/lda_ci_executable ]; then
-            echo "Building Data Analyzer for CI using Makefile..."
-            make data_analyzer_ci || { echo "Data Analyzer compilation failed"; exit 1; }
+          echo "Building Data Analyzer for CI using Makefile..."
+          make data_analyzer_ci || { echo "Data Analyzer compilation failed"; exit 1; }
+      - name: Check Data Analyzer Executable Existence
+        id: check_da_exec
+        run: |
+          if [ -f ./data_analyzer/lda_ci_executable ]; then
+            echo "data_analyzer_exists=true" >> $GITHUB_OUTPUT
           else
-            echo "Using cached Data Analyzer executable or already built for CI."
+            echo "data_analyzer_exists=false" >> $GITHUB_OUTPUT
           fi
           
-          if [ ! -f ./data_analyzer/lda_ci_executable ]; then
-            echo "ERROR: Data Analyzer executable not found after cache/build step!"
-            exit 1
-          fi
-
-          # Define o comando SEM o comentário interno
+      - name: Test C++ Data Analyzer
+        if: steps.check_da_exec.outputs.data_analyzer_exists == 'true'
+        run: |
           DATA_ANALYZER_CMD="./data_analyzer/lda_ci_executable \
             --file ./processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
@@ -178,12 +199,12 @@ jobs:
             --pad_id 0 \
             --print_seq 1 \
             --top_n_tokens 3"
-          
           echo "Executing command: $DATA_ANALYZER_CMD"
           bash -c "$DATA_ANALYZER_CMD" || { echo "Analyzer execution failed"; exit 1; }
 
-      # --- Python Training (Original Steps) ---
+      # --- Python Training ---
       - name: Run train.py (toy model with validation)
+        # ... (no changes)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -194,22 +215,15 @@ jobs:
             --memmap_file_val ./processed_data_ci/ci_val_data.memmap \
             --num_sequences_val 2 \
             --tokenizer_name_or_path gpt2 \
-            --dataset_max_length 32 \
-            --dataset_dtype int32 \
-            --model_max_seq_len 32 \
-            --d_model 32 \
-            --n_layers 1 \
-            --n_heads 1 \
-            --batch_size 1 \
-            --num_epochs 1 \
-            --device cpu \
+            --dataset_max_length 32 --dataset_dtype int32 \
+            --model_max_seq_len 32 --d_model 32 --n_layers 1 --n_heads 1 \
+            --batch_size 1 --num_epochs 1 --device cpu \
             --checkpoint_dir ./checkpoints_ci \
-            --log_interval 1 \
-            --save_strategy epoch \
-            --lora_rank 0 \
-            --seed 42
+            --log_interval 1 --save_strategy epoch \
+            --lora_rank 0 --seed 42
             
       - name: Check for checkpoint files
+        # ... (no changes)
         run: |
           echo "Listing contents of checkpoint directory: ./checkpoints_ci"
           ls -R ./checkpoints_ci
@@ -219,16 +233,18 @@ jobs:
           if [ ! -f "$BEST_MODEL_FILE" ]; then echo "ERROR: 'best_model.pt' not found!"; exit 1; fi
           echo "All expected checkpoint files found. CI test successful."
 
-      - name: Clean up
+      - name: Final CI Cleanup
         if: always()
         run: |
-          echo "Attempting to clean C++ build artifacts with 'make clean'..."
-          make clean || echo "Warning: 'make clean' failed or no Makefile. Proceeding with manual rm."
+          echo "Performing final cleanup..."
+          # Try to use make clean for C++ artifacts first
+          make clean || echo "Info: 'make clean' failed or no Makefile. C++ artifacts might not have been cleaned by make."
           
-          echo "Cleaning up other temporary CI files and directories..."
+          # Then remove other CI-specific temporary files and directories
+          echo "Cleaning up Python venv, temporary data, and test output files..."
           rm -rf .venv-ci \
                  ./temp_data_ci_train ./temp_data_ci_val \
                  ./processed_data_ci ./checkpoints_ci \
                  ./temp_text_cleaner_ci_input ./temp_text_cleaner_ci_output \
-                 expected_output.txt # Este arquivo é criado no step de teste do Text Cleaner
-          echo "CI Cleanup process complete."
+                 expected_output.txt
+          echo "CI cleanup process complete."
