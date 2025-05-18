@@ -109,9 +109,6 @@ jobs:
           
           ./data_analyzer/lda_ci_executable \
             --file ./processed_data_ci/ci_train_data.memmap \
-            # Adjust num_sequences based on how many files/lines are in temp_data_ci_train after cleaning
-            # and processed by prepare_data.py with max_examples.
-            # Let's assume prepare_data will find at least 2 valid lines from the cleaned files.
             --num_sequences 2 \ 
             --max_length 32 \
             --dtype int32 \
