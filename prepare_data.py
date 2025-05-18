@@ -306,7 +306,7 @@ def process_and_save_dataset(example_iterator, tokenizer: AutoTokenizer, output_
             break
 
         # Heuristic to prevent excessively long runs if iterator is bad and max_examples is high
-        if max_examples is not None and examples_from_iterator_count > max_examples * 2 and valid_examples_tokenized_count < max_examples:
+        if max_examples is not None and examples_from_iterator_count > max_examples * 2:
              logger.warning(f"Attempted to read {examples_from_iterator_count} items from iterator but only found {valid_examples_tokenized_count} valid examples. "
                             f"Stopping early to prevent potential infinite loop for max_examples={max_examples}.")
              break
