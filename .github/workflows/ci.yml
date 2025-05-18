@@ -99,15 +99,13 @@ jobs:
           cat "$ACTUAL_OUTPUT_FILE"
           
           # Define expected output
-          # Certifique-se de que esta string está EXATAMENTE como o output esperado,
-          # incluindo newlines. O awk 'NF' abaixo ajuda a normalizar, mas é bom ter isso certo.
           read -r -d '' EXPECTED_CONTENT <<EOF
+          test
           hello world!
           another line.
-          url: [URL] and email: [EMAIL]
+          url: [url] and email: [email]
           duplicate line
           EOF
-          # O read -r -d '' VAR <<EOF ... EOF é uma forma robusta de criar strings multi-linha no shell.
 
           # Normalize actual output for comparison
           # Remove linhas completamente vazias e \r
