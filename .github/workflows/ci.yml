@@ -40,6 +40,7 @@ jobs:
       - name: Create dummy text file for Text Cleaner CI
         run: |
           mkdir -p ./temp_text_cleaner_ci_input
+          # This is the input text the cleaner will process
           cat <<EOF > ./temp_text_cleaner_ci_input/sample_for_cleaner.txt
           <!DOCTYPE html>
           <html> <head><title>Test</title></head> <body>
@@ -56,33 +57,32 @@ jobs:
 
       # --- Cache and Build Text Cleaner ---
       - name: Cache C++ build for Text Cleaner
-        id: cache-text-cleaner # Added id for explicit check later
+        id: cache-text-cleaner
         uses: actions/cache@v3
         with:
-          path: ./text_cleaner/lunaris_text_cleaner_ci_executable # Cache executable in its dir
+          path: ./text_cleaner/lunaris_text_cleaner_ci_executable
           key: ${{ runner.os }}-text-cleaner-${{ hashFiles('text_cleaner/lunaris_text_cleaner.cpp') }}
           restore-keys: |
             ${{ runner.os }}-text-cleaner-
 
       - name: Build C++ Text Cleaner
-        if: steps.cache-text-cleaner.outputs.cache-hit != 'true' # Only build if not cached
+        if: steps.cache-text-cleaner.outputs.cache-hit != 'true'
         run: |
           echo "Building Text Cleaner..."
           cd text_cleaner
           g++ lunaris_text_cleaner.cpp -o lunaris_text_cleaner_ci_executable -std=c++17 -O2 || { echo "Text Cleaner compilation failed"; exit 1; }
           cd ..
-        # else: # Optional: print message if using cache
-        #   echo "Using cached Text Cleaner executable."
-
+      
       # --- Run and Test Text Cleaner ---
       - name: Run and Test C++ Text Cleaner
-        run: | # Use o literal block scalar aqui
-          # Ensure executable exists (either from cache or build)
+        run: |
+          # Ensure executable exists
           if [ ! -f ./text_cleaner/lunaris_text_cleaner_ci_executable ]; then
             echo "ERROR: Text Cleaner executable not found after cache/build step!"
             exit 1
           fi
 
+          # Run the cleaner
           ./text_cleaner/lunaris_text_cleaner_ci_executable \
             --input ./temp_text_cleaner_ci_input/sample_for_cleaner.txt \
             --output ./temp_text_cleaner_ci_output/cleaned_sample.txt \
@@ -90,50 +90,47 @@ jobs:
             --normalize-whitespace \
             --remove-empty-lines \
             --to-lowercase \
-            --process-urls --url-placeholder "[URL]" \
-            --process-emails --email-placeholder "[EMAIL]" \
+            --process-urls --url-placeholder "[url]" \
+            --process-emails --email-placeholder "[email]" \
             --remove-exact-duplicates || { echo "Text Cleaner execution failed"; exit 1; }
 
-          echo "--- Cleaned Text Cleaner Output ---"
+          echo "--- Cleaned Text Cleaner Output (from file) ---"
           ACTUAL_OUTPUT_FILE="./temp_text_cleaner_ci_output/cleaned_sample.txt"
           cat "$ACTUAL_OUTPUT_FILE"
+          echo "--- End of Actual Output ---"
           
-          # Define expected output
-          read -r -d '' EXPECTED_CONTENT <<EOF
+          # Define expected output using a here-string which is less prone to indent issues
+          # Make sure there are NO leading spaces on these lines in your YAML
+          # unless they are genuinely part of the expected output.
+          # Using <<-EOF allows leading tabs in the here-document to be stripped, but not spaces.
+          # So ensure no leading spaces.
+          cat <<-EXPECTED_EOF > expected_output.txt
           test
           hello world!
           another line.
           url: [url] and email: [email]
           duplicate line
-          EOF
+          EXPECTED_EOF
+          # The final newline from the last line of EXPECTED_EOF is preserved.
+          # If your tool's output does not have a final newline on the last line of content,
+          # you might need to adjust this or the comparison.
 
-          # Normalize actual output for comparison
-          # Remove linhas completamente vazias e \r
-          NORMALIZED_ACTUAL_CONTENT=$(awk 'NF' "$ACTUAL_OUTPUT_FILE" | tr -d '\r')
-          
-          # Normalize expected content
-          NORMALIZED_EXPECTED_CONTENT=$(echo "$EXPECTED_CONTENT" | awk 'NF' | tr -d '\r')
+          echo "--- Expected Output (from here-doc) ---"
+          cat expected_output.txt
+          echo "--- End of Expected Output ---"
 
-          echo "--- Comparing Content ---"
-          echo "Normalized Expected:"
-          echo "$NORMALIZED_EXPECTED_CONTENT"
-          echo "Normalized Actual:"
-          echo "$NORMALIZED_ACTUAL_CONTENT"
-          echo "-----------------------"
-
-          if [ "$NORMALIZED_ACTUAL_CONTENT" = "$NORMALIZED_EXPECTED_CONTENT" ]; then
+          # Compare the actual output file with the expected output file
+          # The `diff` command will exit with 0 if files are same, non-zero otherwise.
+          # `-a` treats files as text. `-u` for unified diff format.
+          echo "Comparing files..."
+          if diff -a -u expected_output.txt "$ACTUAL_OUTPUT_FILE"; then
             echo "Text Cleaner output matches expected content."
           else
-            echo "ERROR: Text Cleaner output does NOT match expected content."
-            # Para um diff melhor no log do CI, podemos usar o comando diff
-            echo "Diff:"
-            # Criar arquivos temporários para diff é mais confiável
-            echo "$EXPECTED_CONTENT" > expected.txt
-            # O ACTUAL_CONTENT para diff deve ser o não normalizado para refletir o arquivo real
-            diff -u expected.txt "$ACTUAL_OUTPUT_FILE" || true # o '|| true' evita que o diff falhe o script se houver diferenças
-            rm expected.txt
+            echo "ERROR: Text Cleaner output does NOT match expected content. Diff shown above."
+            # The diff output itself will indicate the differences.
             exit 1
           fi
+          rm expected_output.txt
 
       # --- Python Data Prep (Original Steps) ---
       - name: Create dummy datasets for Python CI
@@ -170,7 +167,7 @@ jobs:
 
       # --- Data Analyzer (Original Steps) ---
       - name: Cache C++ build for Data Analyzer
-        id: cache-data-analyzer # Added id for explicit check later
+        id: cache-data-analyzer
         uses: actions/cache@v3
         with:
           path: ./data_analyzer/lda_ci_executable 
@@ -180,9 +177,7 @@ jobs:
 
       - name: Build and Test C++ data analyzer
         run: |
-          if [ ! -f ./data_analyzer/lda_ci_executable ]; then # Check if file exists (cache might have created it)
-             # Also check if cache-hit was false if you want to be very explicit, 
-             # but checking file existence is often enough.
+          if [ ! -f ./data_analyzer/lda_ci_executable ]; then
             echo "Building Data Analyzer..."
             cd data_analyzer
             g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17 -O2 || { echo "Data Analyzer compilation failed"; exit 1; }
@@ -191,7 +186,6 @@ jobs:
             echo "Using cached Data Analyzer executable or already built."
           fi
           
-          # Ensure executable exists
           if [ ! -f ./data_analyzer/lda_ci_executable ]; then
             echo "ERROR: Data Analyzer executable not found after cache/build step!"
             exit 1
@@ -206,7 +200,6 @@ jobs:
             --top_n_tokens 3"
           
           echo "Executing command: $DATA_ANALYZER_CMD"
-          # Using bash -c to handle the command string, safer than eval
           bash -c "$DATA_ANALYZER_CMD" || { echo "Analyzer execution failed"; exit 1; }
 
       # --- Python Training (Original Steps) ---
@@ -262,5 +255,5 @@ jobs:
                  ./processed_data_ci ./checkpoints_ci \
                  ./data_analyzer/lda_ci_executable \
                  ./temp_text_cleaner_ci_input ./temp_text_cleaner_ci_output \
-                 ./text_cleaner/lunaris_text_cleaner_ci_executable # Added text cleaner artifacts
+                 ./text_cleaner/lunaris_text_cleaner_ci_executable
           echo "Cleaned up temporary files and directories."
