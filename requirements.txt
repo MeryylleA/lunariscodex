@@ -40,7 +40,7 @@ rich>=13.0.0               # For beautiful and informative command-line interfac
                              # pip install flash-attn --no-build-isolation
                              # Refer to the official flash-attn repository for specific version compatibility.
 
-# --- Development & Testing (Consider a separate requirements-dev.txt) ---
+# --- Development & Testing ---
 # pytest>=7.0.0              # For running unit tests.
 # pytest-cov>=4.0.0          # For test coverage reporting.
 # flake8>=6.0.0              # For Python style guide enforcement.
