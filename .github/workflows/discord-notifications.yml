@@ -1,0 +1,67 @@
+# .github/workflows/discord-notifications.yml
+
+name: GitHub Activity to Discord
+
+on:
+  push:
+    branches:
+      - main # Notificar pushes para o branch principal
+  issues:
+    types: [opened, edited, closed, reopened, labeled, unlabeled, assigned, unassigned]
+
+jobs:
+  notify_discord:
+    name: Send Notification to Discord
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code (apenas para acessar informações do evento se necessário)
+        uses: actions/checkout@v4
+
+      # --- Notificação para PUSH no MAIN ---
+      - name: Send Push Notification to Discord
+        if: github.event_name == 'push'
+        uses: tsickert/discord-webhook@v6.0.0 # Uma action popular e simples
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          username: "Lunaris GitHub Bot"
+          avatar-url: "https://github.com/MeryylleA.png"
+          content: |
+            🚀 **Push to `main` by @${{ github.actor }}**
+            Commit: `${{ github.event.head_commit.message }}`
+            Compare changes: ${{ github.event.compare }}
+
+      # --- Notificação para ISSUES ---
+      - name: Send Issue Notification to Discord
+        if: github.event_name == 'issues'
+        uses: tsickert/discord-webhook@v6.0.0
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          username: "Lunaris GitHub Bot"
+          avatar-url: "https://github.com/MeryylleA.png"
+          embeds: |
+            [
+              {
+                "title": "🐛 Issue ${{ github.event.action }}: #${{ github.event.issue.number }} - ${{ github.event.issue.title }}",
+                "url": "${{ github.event.issue.html_url }}",
+                "description": "${{ github.event.issue.body || 'No description provided.' }}".slice(0, 1000) + ( "${{ github.event.issue.body }}".length > 1000 ? "..." : ""),
+                "color": "${{ github.event.action == 'opened' && 5814783 || github.event.action == 'closed' && 15158332 || github.event.action == 'reopened' && 5814783 || 3447003 }}", # Verde para opened/reopened, Vermelho para closed, Azul para outros
+                "author": {
+                  "name": "${{ github.event.issue.user.login }}",
+                  "url": "${{ github.event.issue.user.html_url }}",
+                  "icon_url": "${{ github.event.issue.user.avatar_url }}"
+                },
+                "fields": [
+                  {
+                    "name": "Status",
+                    "value": "${{ github.event.issue.state }} (Action: ${{ github.event.action }})",
+                    "inline": true
+                  },
+                  {
+                    "name": "Labels",
+                    "value": "${{ join(github.event.issue.labels.*.name, ', ') || 'None' }}",
+                    "inline": true
+                  }
+                ],
+                "timestamp": "${{ github.event.issue.updated_at }}"
+              }
+            ]
