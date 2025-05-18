@@ -1,12 +1,13 @@
 [![Lunaris Codex CI](https://github.com/MeryylleA/lunariscodex/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MeryylleA/lunariscodex/actions/workflows/ci.yml)
+[![Test prepare_data.py with Multiple Tokenizers](https://github.com/MeryylleA/lunariscodex/actions/workflows/test_prepare_data_tokenizers.yml/badge.svg?branch=main)](https://github.com/MeryylleA/lunariscodex/actions/workflows/test_prepare_data_tokenizers.yml)
 
 # Lunaris Codex
 
-**Lunaris Codex** is a highly flexible and customizable Transformer Decoder architecture designed for code generation and language modeling. Written entirely in PyTorch, it features modern optimizations like LoRA (Low-Rank Adaptation), optional FlashAttention, ALiBi (Attention with Linear Biases) positional biasing, and a comprehensive, configurable training and data preprocessing pipeline. This repository provides the full source code, enabling users to train their own decoder-only Large Language Models (LLMs) from scratch or efficiently fine-tune existing ones.
+**Lunaris Codex** is a highly flexible and customizable Transformer Decoder architecture designed for code generation and language modeling. Written entirely in PyTorch, it features modern optimizations like LoRA (Low-Rank Adaptation), optional FlashAttention, ALiBi (Attention with Linear Biases) positional biasing, and a comprehensive, configurable training, data preprocessing, and inference pipeline. This repository provides the full source code, enabling users to train their own decoder-only Large Language Models (LLMs) from scratch or efficiently fine-tune existing ones.
 
 Our goal is to provide a clean, understandable, and powerful codebase that serves as an excellent starting point for researchers, students, and developers interested in building, training, and experimenting with state-of-the-art language models.
 
-> **Note:** This project focuses on providing a robust, well-tested architecture and a complete training/data-processing toolkit. While the ambition for large-scale pretrained weights exists (targeting high-end GPU hardware like NVIDIA H100/GH200), the current release empowers users to train models of various sizes on custom datasets today. It is an ideal platform for learning, research, and building specialized models.
+> **Note:** This project focuses on providing a robust, well-tested architecture and a complete training/data-processing/inference toolkit. While the ambition for large-scale pretrained weights exists (targeting high-end GPU hardware like NVIDIA H100/GH200), the current release empowers users to train models of various sizes on custom datasets today. It is an ideal platform for learning, research, and building specialized models.
 
 ---
 
@@ -28,26 +29,35 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
     *   Comprehensive command-line interface (`argparse`) for full control over data sourcing, tokenization, and processing.
     *   Seamlessly processes structured datasets from Hugging Face Hub (e.g., the companion [Lunaris-Data dataset](https://huggingface.co/datasets/meryyllebr543/lunaris-data)) with custom input/target column mapping and formatting.
     *   Supports diverse local text file formats: line-by-line processing, chunking of large files, and glob pattern matching for multiple files.
-    *   Flexible tokenizer loading from Hugging Face Hub by name or local path (including SentencePiece `.model` files and standard `tokenizer.json`).
-    *   Automatic and configurable `pad_token_id` management.
+    *   Flexible tokenizer loading from Hugging Face Hub by name or local path.
+    *   Automatic and configurable `pad_token_id` management with detailed logging.
     *   Efficiently saves processed data as memory-mapped NumPy files (`.memmap`) for rapid loading during training.
 *   **Comprehensive Training Pipeline (`train.py`):**
-    *   Extensive command-line configurability for all training aspects, including hyperparameters, optimization, and operational settings.
+    *   Extensive command-line configurability for all training aspects.
     *   Supports training from scratch and resuming from saved checkpoints.
-    *   Features AdamW optimizer (with optional `fused` mode for CUDA), gradient clipping, and Learning Rate Schedulers (e.g., `ReduceLROnPlateau`).
-    *   Automatic Mixed Precision (AMP) support (`fp16` or `bf16`) for CUDA devices.
-    *   Robust checkpointing: saves and loads model state, optimizer, scheduler, configuration, and training arguments in PyTorch's `.pt` format. Includes "best model" saving based on validation loss.
-    *   Detailed metrics logging (loss, perplexity, top-1 accuracy) for training and validation, with `tqdm` progress bars.
-    *   Optional `torch.compile` support for further optimization (most effective on newer PyTorch versions and GPUs).
+    *   Features AdamW optimizer, gradient clipping, and Learning Rate Schedulers.
+    *   Automatic Mixed Precision (AMP) support (`fp16` or `bf16`) for CUDA.
+    *   Robust checkpointing: saves model state, optimizer, scheduler, model configuration, and training arguments. Includes "best model" saving based on validation loss.
+    *   Detailed metrics logging (loss, perplexity, top-1 accuracy) for training and validation.
+    *   Optional `torch.compile` support for further optimization.
+*   **Text Generation/Inference (`inference.py`):**
+    *   Provides a command-line script to load trained Lunaris Codex models from checkpoints.
+    *   Generates text autoregressively based on a user-provided prompt.
+    *   Supports configurable generation parameters (temperature, top-k, top-p, repetition penalty).
+    *   Completes the end-to-end workflow: data preparation -> training -> inference.
 *   **C++ Utility Toolkit (in `data_analyzer/` and `text_cleaner/`):**
-    *   **`lunaris_data_analyzer`**: A C++ tool for inspecting, validating, and gathering statistics from `.memmap` datasets, using `mmap` on Linux for efficiency.
-    *   **`lunaris_text_cleaner`**: A C++ utility for performing various cleaning and normalization operations on raw text files (single or batch directory processing) before tokenization.
+    *   **`lunaris_data_analyzer`**: A C++ tool for inspecting, validating, and gathering statistics from `.memmap` datasets, now with configurable padding ID.
+    *   **`lunaris_text_cleaner`**: A C++ utility for performing various cleaning operations (including improved HTML cleaning) on raw text files.
 *   **Scalable and Tested:**
-    *   Successfully tested with a ~3M parameter "toy" model trained end-to-end on CPU, demonstrating full pipeline functionality. The architecture is designed to be easily scaled.
+    *   Successfully tested with a ~3M parameter "toy" model trained end-to-end on CPU, demonstrating full pipeline functionality from data preparation and cleaning through training to text generation. The architecture is designed to be easily scaled.
 *   **Continuous Integration:**
-    *   Includes a GitHub Actions CI workflow to test the core data preparation, C++ utilities, and training pipeline, ensuring ongoing stability.
+    *   Includes GitHub Actions CI workflows to test:
+        *   The core Python pipeline (`prepare_data.py`, `train.py`).
+        *   The C++ utilities (`lunaris_text_cleaner`, `lunaris_data_analyzer`).
+        *   `prepare_data.py` compatibility with multiple tokenizers in a separate workflow.
+    *   Ensures ongoing stability and catches regressions.
 *   **CodeQL Security Scanning:**
-    *   Integrated CodeQL for static analysis to help identify potential security vulnerabilities and code quality issues.
+    *   Integrated CodeQL for static analysis.
 
 ---
 
@@ -55,7 +65,7 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
 
 Lunaris Codex implements a standard decoder-only Transformer architecture with several modern enhancements:
 *   **Transformer Blocks:** A stack of `n_layers` identical decoder blocks using Pre-LayerNorm.
-*   **Self-Attention:** Multi-Head Attention with integrated ALiBi. Features optional FlashAttention (CUDA) and a PyTorch-native fallback that correctly handles ALiBi and padding. LoRA can be applied to QKV and output projections.
+*   **Self-Attention:** Multi-Head Attention with integrated ALiBi. Features optional FlashAttention (CUDA) and a PyTorch-native fallback. LoRA can be applied.
 *   **FeedForward Network (FFN):** Position-wise FFN with configurable SwiGLU/GELU activation and LoRA-compatible linear layers.
 *   **Stability:** LayerScale is applied to sub-layer outputs.
 *   **Embeddings:** Tied token embedding and language modeling head.
@@ -99,15 +109,16 @@ Prepare your dataset for training. You can use the [Lunaris-Data dataset](https:
 python prepare_data.py \
     --data_source_type hf_dataset \
     --dataset_name_or_path meryyllebr543/lunaris-data \
+    --tokenizer_name_or_path bigcode/starcoder \
+    --output_path ./processed_data/lunaris_data_sample.memmap \
     --hf_dataset_data_dir data \
     --hf_input_column input \
     --hf_target_column output \
-    --hf_formatting_template "USER: {input} ASSISTANT: {target}" \
-    --tokenizer_name_or_path bigcode/starcoder \
+    --hf_formatting_template "USER: {input}\nASSISTANT: {target}" \
     --max_length 1024 \
     --add_special_tokens \
-    --output_path ./processed_data/lunaris_data_sample.memmap \
-    --max_examples 1000 
+    --max_examples 1000 \
+    --overwrite_output
 ```
 *For detailed usage and more examples, see the [[Data Preparation Pipeline]] page on our Wiki or run `python prepare_data.py --help`.*
 
@@ -131,7 +142,22 @@ python train.py \
 ```
 *For a full list of training options and explanations, see the [[Command-Line Arguments for Training]] page on our Wiki or run `python train.py --help`.*
 
-### 4. Using C++ Utilities (Optional)
+### 4. Running Inference (`inference.py`)
+
+After training your model and saving a checkpoint, you can use `inference.py` to generate text.
+
+**Example: Generating text with a trained model:**
+```bash
+python inference.py \
+    --checkpoint_path ./checkpoints_tutorial/best_model.pt \
+    --tokenizer_name_or_path bigcode/starcoder \
+    --prompt "USER: Write a Python function that calculates factorial.\nASSISTANT:" \
+    --max_new_tokens 100 \
+    --temperature 0.7
+```
+*Replace paths and parameters as needed. Run `python inference.py --help` for all options.*
+
+### 5. Using C++ Utilities (Optional)
 Helper tools for data analysis and text cleaning are available in `data_analyzer/` and `text_cleaner/`. Each contains its own `README.md` with compilation and usage instructions.
 *   **`lunaris_text_cleaner`**: Cleans raw text files before tokenization.
 *   **`lunaris_data_analyzer`**: Inspects and validates `.memmap` dataset files.
@@ -141,16 +167,17 @@ Helper tools for data analysis and text cleaning are available in `data_analyzer
 ## Documentation & Wiki
 
 For in-depth information, tutorials, and advanced guides, please visit the **[Lunaris Codex Project Wiki](https://github.com/MeryylleA/lunariscodex/wiki)**.
+
 ---
 
 ## Roadmap
 
 Our current focus and future plans include:
-*   Refining and thoroughly testing the `inference.py` script.
-*   Expanding documentation with more tutorials and API details.
-*   Providing example configurations for training on common public datasets.
-*   Benchmarking performance across different model sizes and hardware.
-*   Exploring further optimizations like gradient checkpointing and deeper Hugging Face Hub integration.
+*   Further enhancing `inference.py` with features like interactive mode, batch generation, improved visual output, and advanced sampling techniques.
+*   Expanding documentation with more advanced tutorials and API reference details.
+*   Providing example configurations and scripts for training on common public datasets (e.g., SlimPajama, The Stack).
+*   Benchmarking performance and generation quality across different model sizes and hardware.
+*   Exploring further optimizations such as gradient checkpointing and advanced quantization techniques.
 *   (Ambitious) Releasing small to medium pretrained base models if resources permit.
 
 ---
@@ -170,9 +197,11 @@ Developed by **Francisco Antonio** ([@MeryylleA](https://github.com/MeryylleA) o
 
 Lunaris Codex is an open-source endeavor. Contributions, feedback, bug reports, and feature requests are highly encouraged! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) guidelines and join our [GitHub Discussions](https://github.com/MeryylleA/lunariscodex/discussions).
 
-Special thanks to the open-source AI community and to **Gemini** for extensive pair-programming, architectural discussions, and debugging support.
+Let's build something amazing together!
 
-> Let's build something amazing together!
+### Special Thanks
+*   To the broader open-source AI community for their invaluable tools, research, and datasets.
+*   To **Gemini (Google)** for extensive pair-programming sessions, architectural discussions, debugging support, and documentation assistance throughout the development of this project.
 
 ---
 
