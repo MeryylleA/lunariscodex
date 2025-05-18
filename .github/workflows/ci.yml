@@ -4,8 +4,37 @@ name: Lunaris Codex CI
 on:
   push:
     branches: [ main ]
+    paths: # Só roda se houver mudanças nestes caminhos ou nos diretórios
+      - 'model.py'
+      - 'prepare_data.py'
+      - 'train.py'
+      - 'inference.py'
+      - 'text_cleaner/**'
+      - 'data_analyzer/**'
+      - 'tests/**'
+      - 'Makefile'
+      - 'requirements.txt'
+      - '.github/workflows/ci.yml' # Mudanças no próprio workflow
+    # Alternativamente, para ignorar:
+    # paths-ignore:
+    #   - 'README.md'
+    #   - 'LICENSE'
+    #   - 'CONTRIBUTING.md'
+    #   - 'docs/**' # Se você tiver um diretório de docs
+    #   - '**/*.md' # Ignora todos os markdowns (cuidado para não ignorar algo importante)
   pull_request:
     branches: [ main ]
+    paths: # Mesma lógica para PRs
+      - 'model.py'
+      - 'prepare_data.py'
+      - 'train.py'
+      - 'inference.py'
+      - 'text_cleaner/**'
+      - 'data_analyzer/**'
+      - 'tests/**'
+      - 'Makefile'
+      - 'requirements.txt'
+      - '.github/workflows/ci.yml'
   workflow_dispatch:
 
 jobs:
@@ -35,15 +64,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Install Python dependencies
+      - name: Install Python dependencies (including rich for inference)
         run: |
           python -m venv .venv-ci
           source .venv-ci/bin/activate
           pip install --upgrade pip
           echo "Installing dependencies from requirements.txt..."
-          pip install -r requirements.txt
-      
+          pip install -r requirements.txt # Garanta que 'rich' está no requirements.txt
+
+      # --- Text Cleaner Steps ---
       - name: Create dummy text file for Text Cleaner CI
+        # ... (sem mudanças)
         run: |
           mkdir -p ./temp_text_cleaner_ci_input
           cat <<EOF > ./temp_text_cleaner_ci_input/sample_for_cleaner.txt
@@ -59,23 +90,23 @@ jobs:
           </body> </html>
           EOF
           mkdir -p ./temp_text_cleaner_ci_output
-
       - name: Cache C++ build for Text Cleaner
         id: cache-text-cleaner
+        # ... (sem mudanças)
         uses: actions/cache@v3
         with:
           path: ./text_cleaner/lunaris_text_cleaner_ci_executable 
           key: ${{ runner.os }}-text-cleaner-ci-${{ hashFiles('Makefile', 'text_cleaner/lunaris_text_cleaner.cpp') }}
           restore-keys: |
             ${{ runner.os }}-text-cleaner-ci-
-
       - name: Build C++ Text Cleaner (if not cached)
         if: steps.cache-text-cleaner.outputs.cache-hit != 'true'
+        # ... (sem mudanças)
         run: |
           echo "Building Text Cleaner for CI using Makefile..."
           make text_cleaner_ci || { echo "Text Cleaner compilation failed"; exit 1; }
-      
       - name: Run and Test C++ Text Cleaner
+        # ... (sem mudanças)
         run: |
           TEXT_CLEANER_EXEC="./text_cleaner/lunaris_text_cleaner_ci_executable"
           if [ ! -f "$TEXT_CLEANER_EXEC" ]; then
@@ -85,19 +116,15 @@ jobs:
           "$TEXT_CLEANER_EXEC" \
             --input ./temp_text_cleaner_ci_input/sample_for_cleaner.txt \
             --output ./temp_text_cleaner_ci_output/cleaned_sample.txt \
-            --remove-html \
-            --normalize-whitespace \
-            --remove-empty-lines \
+            --remove-html --normalize-whitespace --remove-empty-lines \
             --to-lowercase \
             --process-urls --url-placeholder "[url]" \
             --process-emails --email-placeholder "[email]" \
             --remove-exact-duplicates || { echo "Text Cleaner execution failed"; exit 1; }
-          
           echo "--- Cleaned Text Cleaner Output (from file) ---"
           ACTUAL_OUTPUT_FILE="./temp_text_cleaner_ci_output/cleaned_sample.txt"
           cat "$ACTUAL_OUTPUT_FILE"
           echo "--- End of Actual Output ---"
-          
           cat <<-EXPECTED_EOF > expected_output.txt
           test
           hello world!
@@ -105,11 +132,9 @@ jobs:
           url: [url] and email: [email]
           duplicate line
           EXPECTED_EOF
-          
           echo "--- Expected Output (from here-doc) ---"
           cat expected_output.txt
           echo "--- End of Expected Output ---"
-          
           echo "Comparing files..."
           if diff -a -u expected_output.txt "$ACTUAL_OUTPUT_FILE"; then
             echo "Text Cleaner output matches expected content."
@@ -118,7 +143,9 @@ jobs:
             exit 1
           fi
 
+      # --- Python Data Prep ---
       - name: Create dummy datasets for Python CI
+        # ... (sem mudanças)
         run: |
           mkdir -p ./temp_data_ci_train
           echo "def train_function_one(): return 'train1'" > ./temp_data_ci_train/train_sample_1.py
@@ -126,10 +153,10 @@ jobs:
           mkdir -p ./temp_data_ci_val
           echo "def validation_function(): return 'validation_data_here'" > ./temp_data_ci_val/val_sample_1.py
           echo "# Another validation line" > ./temp_data_ci_val/val_sample_2.py
-
       - name: Run prepare_data.py for CI datasets
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        # ... (sem mudanças)
         run: |
           source .venv-ci/bin/activate
           echo "--- Preparing Training Data for CI ---"
@@ -148,29 +175,30 @@ jobs:
             --output_path ./processed_data_ci/ci_val_data.memmap \
             --max_length 32 --max_examples 2 --overwrite_output
 
+      # --- Data Analyzer ---
       - name: Cache C++ build for Data Analyzer
         id: cache-data-analyzer
+        # ... (sem mudanças)
         uses: actions/cache@v3
         with:
           path: ./data_analyzer/lda_ci_executable 
           key: ${{ runner.os }}-data-analyzer-ci-${{ hashFiles('Makefile', 'data_analyzer/lunaris_data_analyzer.cpp') }}
           restore-keys: |
             ${{ runner.os }}-data-analyzer-ci-
-
       - name: Build C++ Data Analyzer (if not cached)
         if: steps.cache-data-analyzer.outputs.cache-hit != 'true'
+        # ... (sem mudanças)
         run: |
           echo "Building Data Analyzer for CI using Makefile..."
           make data_analyzer_ci || { echo "Data Analyzer compilation failed"; exit 1; }
-          
       - name: Test C++ Data Analyzer
+        # ... (sem mudanças)
         run: |
           DATA_ANALYZER_EXEC="./data_analyzer/lda_ci_executable"
           if [ ! -f "$DATA_ANALYZER_EXEC" ]; then
             echo "ERROR: Data Analyzer executable '$DATA_ANALYZER_EXEC' not found!"
             exit 1
           fi
-
           DATA_ANALYZER_CMD="$DATA_ANALYZER_EXEC \
             --file ./processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
@@ -179,13 +207,14 @@ jobs:
             --pad_id 0 \
             --print_seq 1 \
             --top_n_tokens 3"
-          
           echo "Executing command: $DATA_ANALYZER_CMD"
           bash -c "$DATA_ANALYZER_CMD" || { echo "Analyzer execution failed"; exit 1; }
 
+      # --- Python Training ---
       - name: Run train.py (toy model with validation)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        # ... (sem mudanças)
         run: |
           source .venv-ci/bin/activate
           python train.py \
@@ -202,6 +231,8 @@ jobs:
             --lora_rank 0 --seed 42
             
       - name: Check for checkpoint files
+        id: check_ckpts # Dar um ID para depender dele
+        # ... (sem mudanças)
         run: |
           echo "Listing contents of checkpoint directory: ./checkpoints_ci"
           ls -R ./checkpoints_ci
@@ -211,8 +242,41 @@ jobs:
           if [ ! -f "$BEST_MODEL_FILE" ]; then echo "ERROR: 'best_model.pt' not found!"; exit 1; fi
           echo "All expected checkpoint files found. CI test successful."
 
+      # --- NEW: Test Inference Script ---
+      - name: Test inference.py with toy model checkpoint
+        if: success() && steps.check_ckpts.outcome == 'success' # Só roda se os steps anteriores passaram e checkpoints foram criados
+        run: |
+          source .venv-ci/bin/activate
+          echo "Running inference test..."
+          # Usar o best_model.pt ou o checkpoint da última época que sabemos que existe
+          CHECKPOINT_TO_TEST="./checkpoints_ci/best_model.pt" 
+          # Se best_model.pt não for garantido, use o da época: ./checkpoints_ci/lunaris_codex_epoch-1_step-X.pt (ajuste X)
+
+          # Rodar inference.py com um prompt simples e poucas tokens
+          # A flag --no_rich é importante para evitar problemas de output complexo no CI
+          # e para facilitar a verificação se o script apenas "rodou" sem erro.
+          OUTPUT=$(python inference.py \
+            --checkpoint_path "$CHECKPOINT_TO_TEST" \
+            --tokenizer_name_or_path gpt2 \
+            --prompt "Test prompt:" \
+            --max_new_tokens 5 \
+            --temperature 0.5 \
+            --device cpu \
+            --no_rich)
+          
+          # Verificação básica: o script rodou sem erro e produziu algum output?
+          if [ $? -eq 0 ] && [ -n "$OUTPUT" ]; then
+            echo "Inference script ran successfully and produced output."
+            echo "Generated output snippet (first 100 chars): ${OUTPUT:0:100}..."
+          else
+            echo "ERROR: Inference script failed or produced no output."
+            echo "Output was: $OUTPUT"
+            exit 1
+          fi
+      
       - name: Final CI Cleanup
         if: always()
+        # ... (sem mudanças)
         run: |
           echo "Performing final cleanup..."
           make clean || echo "Info: 'make clean' failed or no Makefile. C++ artifacts might not have been cleaned by make."
