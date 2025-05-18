@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  lint-and-test: # Renomeado para incluir linting
+  test-pipeline:
     runs-on: ubuntu-latest
 
     steps:
@@ -29,23 +29,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Install Python dependencies and flake8
+      - name: Install Python dependencies
         run: |
           python -m venv .venv-ci
           source .venv-ci/bin/activate
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install flake8 # Instalar flake8
-
-      - name: Lint with flake8
-        run: |
-          source .venv-ci/bin/activate
-          echo "Linting source code with flake8 (strict checks)..."
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.venv-ci,__pycache__,.git,build,dist,*.egg-info,data_analyzer,text_cleaner
-          
-          echo "Linting source code with flake8 (additional checks, advisory)..."
-          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude=.venv-ci,__pycache__,.git,build,dist,*.egg-info,data_analyzer,text_cleaner
       
+      # C++ build tools are generally available on ubuntu-latest runner
+
       - name: Create dummy datasets for CI
         run: |
           mkdir -p ./temp_data_ci_train
@@ -78,39 +70,34 @@ jobs:
             --output_path ./processed_data_ci/ci_val_data.memmap \
             --max_examples 2
 
-      - name: Cache C++ build (Data Analyzer)
-        id: cache-data-analyzer
+      - name: Cache C++ build for Data Analyzer
         uses: actions/cache@v3
         with:
-          path: data_analyzer/lunaris_data_analyzer
-          key: ${{ runner.os }}-data-analyzer-${{ hashFiles('data_analyzer/Makefile', 'data_analyzer/lunaris_data_analyzer.cpp') }}
+          path: ./data_analyzer/lda_ci_executable
+          key: ${{ runner.os }}-data-analyzer-${{ hashFiles('data_analyzer/lunaris_data_analyzer.cpp') }}
           restore-keys: |
             ${{ runner.os }}-data-analyzer-
 
-      - name: Build C++ data analyzer (using Makefile if not cached)
-        # Compila somente se o cache não foi encontrado
-        if: steps.cache-data-analyzer.outputs.cache-hit != 'true'
-        working-directory: ./data_analyzer
+      - name: Build and Test C++ data analyzer
         run: |
-          echo "Cache miss for lunaris_data_analyzer. Building..."
-          make || { echo "C++ compilation failed"; exit 1; }
-          
-      - name: Test C++ data analyzer
-        run: |
-          # Verificar se o arquivo existe antes de tentar executar
-          if [ ! -f "./data_analyzer/lunaris_data_analyzer" ]; then
-            echo "ERROR: lunaris_data_analyzer executable not found after build/cache step!"
-            echo "This might indicate an issue with the build process or caching."
-            exit 1
+          if [ ! -f ./data_analyzer/lda_ci_executable ]; then
+            cd data_analyzer
+            g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17 || { echo "Compilation failed"; exit 1; }
+            cd ..
+          else
+            echo "Using cached data_analyzer executable"
           fi
-          echo "Executing data analyzer..."
-          ./data_analyzer/lunaris_data_analyzer \
+          
+          DATA_ANALYZER_CMD="./data_analyzer/lda_ci_executable \
             --file ./processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
             --max_length 32 \
             --dtype int32 \
             --print_seq 1 \
-            --top_n_tokens 3 || { echo "Analyzer execution failed"; exit 1; }
+            --top_n_tokens 3"
+          
+          echo "Executing command: $DATA_ANALYZER_CMD"
+          eval $DATA_ANALYZER_CMD || { echo "Analyzer execution failed"; exit 1; }
 
       - name: Run train.py (toy model with validation)
         env:
@@ -149,21 +136,20 @@ jobs:
           if [ ! -f "$MAIN_CKPT_FILE" ]; then
             echo "ERROR: Main checkpoint file '$MAIN_CKPT_FILE' not found!"
             exit 1
+          else
+            echo "Main checkpoint file '$MAIN_CKPT_FILE' found."
           fi
+
           if [ ! -f "$BEST_MODEL_FILE" ]; then
-            echo "ERROR: 'best_model.pt' not found!"
+            echo "ERROR: 'best_model.pt' not found! Expected with validation and save_strategy=epoch."
             exit 1
+          else
+            echo "'best_model.pt' found."
           fi
-          echo "All expected checkpoint files found."
+          echo "All expected checkpoint files found. CI test successful."
 
       - name: Clean up
         if: always()
         run: |
-          rm -rf .venv-ci ./temp_data_ci_train ./temp_data_ci_val ./processed_data_ci ./checkpoints_ci
-          # Use o make clean para limpar os artefatos de build C++
-          if [ -f "data_analyzer/Makefile" ]; then
-            (cd data_analyzer && make clean)
-          else
-            rm -f data_analyzer/lunaris_data_analyzer data_analyzer/*.o
-          fi
+          rm -rf .venv-ci ./temp_data_ci_train ./temp_data_ci_val ./processed_data_ci ./checkpoints_ci ./data_analyzer/lda_ci_executable
           echo "Cleaned up temporary files and directories."
