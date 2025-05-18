@@ -1,39 +1,32 @@
 # .github/workflows/release-drafter.yml
 
-name: Release Drafter
+name: Release Drafter (Currently Disabled for Auto-Trigger) # Adicione uma nota no nome
 
 on:
-  push:
-    branches:
-      - main # Runs when anything is merged/pushed to main
-  pull_request:
-    # Runs when a PR targeting main is closed (merged or just closed without merging)
-    # This helps update the draft if a PR was part of it but then closed without merging.
-    # Also helps if you manually tag a release and want the draft to reset.
-    types: [closed]
-    branches:
-      - main
-  workflow_dispatch: # Allows manual triggering
+  workflow_dispatch: # Permite acionamento manual SOMENTE
+  # push: # Comentado para desabilitar
+  #   branches:
+  #     - main 
+  # pull_request: # Comentado para desabilitar
+  #   types: [closed]
+  #   branches:
+  #     - main
 
-permissions: # Grant necessary permissions to GITHUB_TOKEN
-  contents: write     # To create/update release drafts and tags
-  pull-requests: read # To read PR labels and titles
+permissions: 
+  contents: write     
+  pull-requests: read 
 
 jobs:
   update_release_draft:
     name: Update Release Draft
     runs-on: ubuntu-latest
-    # Only run job if the PR was merged (for pull_request trigger)
-    # For push to main, it always runs.
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    # A condição if não é mais estritamente necessária se só temos workflow_dispatch,
+    # mas não faz mal mantê-la.
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true) || github.event_name == 'workflow_dispatch'
     steps:
       - name: Draft Next Release
         uses: release-drafter/release-drafter@v6
         with:
-          # Specify the config file name (optional if it's .github/release-drafter.yml)
           config-name: release-drafter-config.yml
-          # Set to true to publish the release automatically when a new version tag is pushed.
-          # For now, let's keep it as drafting, you publish manually.
-          # publish: true 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
