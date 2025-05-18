@@ -90,7 +90,7 @@ jobs:
             --tokenizer_name_or_path gpt2 \
             --max_length 32 \
             --output_path ./processed_data_ci/ci_train_data.memmap \
-            --max_examples 2  # Ajustado de 10 para 2, para alinhar com num_sequences
+            --max_examples 2
 
           echo "--- Preparing Validation Data (raw) for CI ---"
           python prepare_data.py \
@@ -108,14 +108,17 @@ jobs:
           cd data_analyzer && g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17 -g || { echo "Compilation failed"; exit 1; }
           cd ..
           
-          # Execute the analyzer with the correct path
-          ./data_analyzer/lda_ci_executable \
+          # Adjusted max_length to 90 to reflect the actual file size (1152 bytes / (2 sequences * 4 bytes) = 90 tokens)
+          DATA_ANALYZER_CMD="./data_analyzer/lda_ci_executable \
             --file ./processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
-            --max_length 90 \  # Ajustado para 90, refletindo o tamanho real do arquivo
+            --max_length 90 \
             --dtype int32 \
             --print_seq 1 \
-            --top_n_tokens 3 || { echo "Analyzer execution failed"; exit 1; }
+            --top_n_tokens 3"
+          
+          echo "Executing command: $DATA_ANALYZER_CMD"
+          eval $DATA_ANALYZER_CMD || { echo "Analyzer execution failed"; exit 1; }
 
       - name: Run train.py (toy model with validation)
         env:
@@ -128,9 +131,9 @@ jobs:
             --memmap_file_val ./processed_data_ci/ci_val_data.memmap \
             --num_sequences_val 2 \
             --tokenizer_name_or_path gpt2 \
-            --dataset_max_length 90 \  # Ajustado para 90, alinhado com o analyzer
+            --dataset_max_length 90 \
             --dataset_dtype int32 \
-            --model_max_seq_len 90 \  # Ajustado para 90
+            --model_max_seq_len 90 \
             --d_model 32 \
             --n_layers 1 \
             --n_heads 1 \
