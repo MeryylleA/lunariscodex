@@ -67,7 +67,7 @@ jobs:
 
       - name: Run prepare_data.py with tokenizer ${{ matrix.tokenizer }}
         env:
-          # HF_TOKEN: ${{ secrets.HF_TOKEN }} # Descomente se algum tokenizador for privado
+          HF_TOKEN: ${{ secrets.HF_TOKEN }} 
         run: |
           source .venv-tokenizer-test/bin/activate
           echo "--- Preparing Data with Tokenizer: ${{ matrix.tokenizer }} ---"
