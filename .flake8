@@ -1,11 +1,12 @@
 [flake8]
 max-line-length = 127
 max-complexity = 12
-# ignore = E203, W503  # Exemplo: ignorar erros específicos se necessário
 exclude =
     .git,
     __pycache__,
-    .venv*,  # Para ignorar qualquer venv
+    .venv*,  
     build,
     dist,
-    *.egg-info
+    *.egg-info,
+    docs,      
+    notebooks  
