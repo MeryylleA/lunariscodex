@@ -25,7 +25,6 @@ def get_tokenizer(tokenizer_name_or_path: str, trust_remote_code_flag: bool = Tr
 
     if tokenizer.pad_token_id is None:
         original_vocab_size = len(tokenizer)
-        pad_token_source_info = "unknown (should not happen)" # Default info
 
         if tokenizer.eos_token_id is not None:
             logger.info(f"Tokenizer lacks a pad_token_id. Using eos_token_id ({tokenizer.eos_token_id}) as pad_token_id.")
