@@ -100,20 +100,20 @@ jobs:
             --max_length 32 \
             --output_path ./processed_data_ci/ci_val_data.memmap \
             --max_examples 2
-
+            
       - name: Build and Run C++ Data Analyzer
         run: |
           echo "--- Building and Running lunaris_data_analyzer ---"
           # Assuming data_analyzer source is in 'data_analyzer/' directory
-          (cd data_analyzer && g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17)
+          (cd data_analyzer && g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17 -g) # Adicionei -g para debug symbols
           
           ./data_analyzer/lda_ci_executable \
-            --file ./processed_data_ci/ci_train_data.memmap \
-            --num_sequences 2 \ 
+            --file ../processed_data_ci/ci_train_data.memmap \ # Ajustado caminho se lda_ci_executable está em data_analyzer/
+            --num_sequences 2 \
             --max_length 32 \
             --dtype int32 \
             --print_seq 1 \
-            --top_n_tokens 3 
+            --top_n_tokens 3
 
       - name: Run train.py (toy model with validation)
         env:
