@@ -60,8 +60,6 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ./text_cleaner/lunaris_text_cleaner_ci_executable 
-          # Key now includes Makefile if it influences the build (it does via flags, etc.)
-          # and the source file.
           key: ${{ runner.os }}-text-cleaner-ci-${{ hashFiles('Makefile', 'text_cleaner/lunaris_text_cleaner.cpp') }}
           restore-keys: |
             ${{ runner.os }}-text-cleaner-ci-
@@ -73,7 +71,6 @@ jobs:
           make text_cleaner_ci || { echo "Text Cleaner compilation failed"; exit 1; }
       
       # --- Run and Test Text Cleaner ---
-      # (Esta parte continua igual, pois depende do nome do executável _ci_executable)
       - name: Run and Test C++ Text Cleaner
         run: |
           if [ ! -f ./text_cleaner/lunaris_text_cleaner_ci_executable ]; then
@@ -111,11 +108,10 @@ jobs:
             echo "ERROR: Text Cleaner output does NOT match expected content. Diff shown above."
             exit 1
           fi
-          rm expected_output.txt
+          # rm expected_output.txt # Removido do rm -rf abaixo
 
       # --- Python Data Prep (Original Steps) ---
       - name: Create dummy datasets for Python CI
-        # ... (sem mudanças aqui) ...
         run: |
           mkdir -p ./temp_data_ci_train
           echo "def train_function_one(): return 'train1'" > ./temp_data_ci_train/train_sample_1.py
@@ -125,7 +121,6 @@ jobs:
           echo "# Another validation line" > ./temp_data_ci_val/val_sample_2.py
 
       - name: Run prepare_data.py for CI datasets
-        # ... (sem mudanças aqui) ...
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -138,7 +133,7 @@ jobs:
             --max_length 32 \
             --output_path ./processed_data_ci/ci_train_data.memmap \
             --max_examples 2 \
-            --overwrite_output # Adicionado para consistência, se prepare_data.py suportar
+            --overwrite_output
 
           echo "--- Preparing Validation Data for CI ---"
           python prepare_data.py \
@@ -148,7 +143,7 @@ jobs:
             --max_length 32 \
             --output_path ./processed_data_ci/ci_val_data.memmap \
             --max_examples 2 \
-            --overwrite_output # Adicionado para consistência
+            --overwrite_output
 
       # --- Data Analyzer (Original Steps) ---
       - name: Cache C++ build for Data Analyzer
@@ -162,7 +157,6 @@ jobs:
 
       - name: Build and Test C++ data analyzer
         run: |
-          # Build using Makefile if not cached
           if [ ! -f ./data_analyzer/lda_ci_executable ]; then
             echo "Building Data Analyzer for CI using Makefile..."
             make data_analyzer_ci || { echo "Data Analyzer compilation failed"; exit 1; }
@@ -170,24 +164,25 @@ jobs:
             echo "Using cached Data Analyzer executable or already built for CI."
           fi
           
-          # Test (continua igual)
           if [ ! -f ./data_analyzer/lda_ci_executable ]; then
             echo "ERROR: Data Analyzer executable not found after cache/build step!"
             exit 1
           fi
+
+          # Define o comando SEM o comentário interno
           DATA_ANALYZER_CMD="./data_analyzer/lda_ci_executable \
             --file ./processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
             --max_length 32 \
             --dtype int32 \
-            --pad_id 0 \ # Adicionando o pad_id que o data_analyzer agora espera (0 é o default dele)
+            --pad_id 0 \
             --print_seq 1 \
             --top_n_tokens 3"
+          
           echo "Executing command: $DATA_ANALYZER_CMD"
           bash -c "$DATA_ANALYZER_CMD" || { echo "Analyzer execution failed"; exit 1; }
 
       # --- Python Training (Original Steps) ---
-      # ... (sem mudanças aqui) ...
       - name: Run train.py (toy model with validation)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -215,7 +210,6 @@ jobs:
             --seed 42
             
       - name: Check for checkpoint files
-        # ... (sem mudanças aqui) ...
         run: |
           echo "Listing contents of checkpoint directory: ./checkpoints_ci"
           ls -R ./checkpoints_ci
@@ -228,14 +222,13 @@ jobs:
       - name: Clean up
         if: always()
         run: |
-          # Use make clean para as ferramentas C++ se preferir, ou rm manual
-          make clean || echo "Make clean failed or no Makefile, continuing with manual rm..."
+          echo "Attempting to clean C++ build artifacts with 'make clean'..."
+          make clean || echo "Warning: 'make clean' failed or no Makefile. Proceeding with manual rm."
+          
+          echo "Cleaning up other temporary CI files and directories..."
           rm -rf .venv-ci \
                  ./temp_data_ci_train ./temp_data_ci_val \
                  ./processed_data_ci ./checkpoints_ci \
                  ./temp_text_cleaner_ci_input ./temp_text_cleaner_ci_output \
-                 # Os executáveis já são removidos pelo 'make clean' se ele existir e funcionar
-                 # ./data_analyzer/lda_ci_executable \ # Removido se make clean funcionar
-                 # ./text_cleaner/lunaris_text_cleaner_ci_executable # Removido se make clean funcionar
-                 expected_output.txt # Limpa o arquivo de teste do diff
-          echo "Cleaned up temporary files and directories."
+                 expected_output.txt # Este arquivo é criado no step de teste do Text Cleaner
+          echo "CI Cleanup process complete."
