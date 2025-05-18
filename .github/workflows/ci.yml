@@ -59,23 +59,24 @@ jobs:
           echo "--- Building and Running lunaris_text_cleaner ---"
           (cd text_cleaner && g++ lunaris_text_cleaner.cpp -o ltc_ci_executable -std=c++17)
           
-          # Clean the raw training files into the directories prepare_data.py will use
-          ./text_cleaner/ltc_ci_executable \
+          # Define o comando em uma variável para facilitar o echo e a execução
+          CLEANER_CMD="./text_cleaner/ltc_ci_executable \
             --input ./temp_data_ci_raw \
-            --output ./temp_data_ci_train \ 
-            --input-pattern "*" \ 
+            --output ./temp_data_ci_train \
+            --input-pattern \"*\" \
             --recursive \
             --normalize-whitespace \
             --to-lowercase \
             --remove-empty-lines \
-            --process-urls --url-placeholder "[URL]" \
-            --process-emails --email-placeholder "[EMAIL]" \
-            --remove-exact-duplicates
+            --process-urls --url-placeholder \"[URL]\" \
+            --process-emails --email-placeholder \"[EMAIL]\" \
+            --remove-exact-duplicates"
+          
+          echo "Executing command: $CLEANER_CMD" # Loga o comando
+          eval $CLEANER_CMD # Executa o comando
           
           echo "Contents of temp_data_ci_train after cleaning:"
           ls -R ./temp_data_ci_train
-          # Note: Validation data is not cleaned in this simple CI setup for brevity,
-          # but in a real scenario, you might clean it too.
 
       - name: Run prepare_data.py for CI datasets
         env:
