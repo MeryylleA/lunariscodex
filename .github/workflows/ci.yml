@@ -10,6 +10,7 @@ on:
 
 jobs:
   test-pipeline:
+    name: Test Python Pipeline and C++ Utilities
     runs-on: ubuntu-latest
 
     steps:
@@ -28,32 +29,70 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
       
-      # C++ build tools are generally available on ubuntu-latest runner
+      # C++ build tools (g++) are generally available on ubuntu-latest runner.
 
       - name: Create dummy datasets for CI
         run: |
-          mkdir -p ./temp_data_ci_train
-          echo "def train_function_one(): return 'train1'" > ./temp_data_ci_train/train_sample_1.py
-          echo "class TrainSampleClass:\n  value = 'train2'" > ./temp_data_ci_train/train_sample_2.py
-          mkdir -p ./temp_data_ci_val
+          echo "Creating dummy text files for CI tests..."
+          mkdir -p ./temp_data_ci_raw # For text_cleaner input
+          mkdir -p ./temp_data_ci_train # For prepare_data input (after cleaning)
+          mkdir -p ./temp_data_ci_val   # For prepare_data input (after cleaning)
+
+          echo "   Line with too many    spaces and MiXeD CaSe. URL: http://example.com/test" > ./temp_data_ci_raw/raw_file1.txt
+          echo "contact_me@example.org for details" >> ./temp_data_ci_raw/raw_file1.txt
+          echo "" >> ./temp_data_ci_raw/raw_file1.txt # Empty line
+          echo "Duplicate line to be cleaned." >> ./temp_data_ci_raw/raw_file1.txt
+          echo "Duplicate line to be cleaned." >> ./temp_data_ci_raw/raw_file1.txt
+          
+          echo "Another file for training." > ./temp_data_ci_raw/raw_file2.log # Different extension
+          
+          # Create files that will be "cleaned" and then used by prepare_data
+          cp ./temp_data_ci_raw/raw_file1.txt ./temp_data_ci_train/train_sample_1.txt # Will be cleaned by text_cleaner first
+          cp ./temp_data_ci_raw/raw_file2.log ./temp_data_ci_train/train_sample_2.log # Will be cleaned
+          
           echo "def validation_function(): return 'validation_data_here'" > ./temp_data_ci_val/val_sample_1.py
-          echo "# Another validation line" > ./temp_data_ci_val/val_sample_2.py
+          echo "# Another validation line for diversity" > ./temp_data_ci_val/val_sample_2.py
+          echo "Done creating dummy files."
+
+      - name: Build and Run C++ Text Cleaner
+        run: |
+          echo "--- Building and Running lunaris_text_cleaner ---"
+          # Assuming text_cleaner source is in 'text_cleaner/' directory
+          (cd text_cleaner && g++ lunaris_text_cleaner.cpp -o ltc_ci_executable -std=c++17)
+          
+          # Clean the raw training files into the directories prepare_data.py will use
+          ./text_cleaner/ltc_ci_executable \
+            --input ./temp_data_ci_raw \
+            --output ./temp_data_ci_train \ # Output cleaned files to where prepare_data expects train files
+            --input-pattern "*" \ # Clean all files in raw
+            --recursive \
+            --normalize-whitespace \
+            --to-lowercase \
+            --remove-empty-lines \
+            --process-urls --url-placeholder "[URL]" \
+            --process-emails --email-placeholder "[EMAIL]" \
+            --remove-exact-duplicates
+          
+          echo "Contents of temp_data_ci_train after cleaning:"
+          ls -R ./temp_data_ci_train
+          # Note: Validation data is not cleaned in this simple CI setup for brevity,
+          # but in a real scenario, you might clean it too.
 
       - name: Run prepare_data.py for CI datasets
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }} # In case tokenizer needs it
         run: |
           source .venv-ci/bin/activate
-          echo "--- Preparing Training Data for CI ---"
+          echo "--- Preparing Training Data (from cleaned files) for CI ---"
           python prepare_data.py \
             --data_source_type text_file_lines \
-            --dataset_name_or_path "./temp_data_ci_train/*.py" \
+            --dataset_name_or_path "./temp_data_ci_train/*" \ # Use cleaned files
             --tokenizer_name_or_path gpt2 \
             --max_length 32 \
             --output_path ./processed_data_ci/ci_train_data.memmap \
-            --max_examples 2
+            --max_examples 10 # Limit to avoid issues if many small files are created
 
-          echo "--- Preparing Validation Data for CI ---"
+          echo "--- Preparing Validation Data (raw) for CI ---"
           python prepare_data.py \
             --data_source_type text_file_lines \
             --dataset_name_or_path "./temp_data_ci_val/*.py" \
@@ -62,15 +101,18 @@ jobs:
             --output_path ./processed_data_ci/ci_val_data.memmap \
             --max_examples 2
 
-      - name: Build and Test C++ data analyzer
+      - name: Build and Run C++ Data Analyzer
         run: |
-          # Assuming the C++ utility is in 'data_analyzer' relative to repo root
-          # If you created utils/data_analyzer, change path accordingly
-          cd data_analyzer 
-          g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17
-          ./lda_ci_executable \
-            --file ../processed_data_ci/ci_train_data.memmap \
-            --num_sequences 2 \
+          echo "--- Building and Running lunaris_data_analyzer ---"
+          # Assuming data_analyzer source is in 'data_analyzer/' directory
+          (cd data_analyzer && g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17)
+          
+          ./data_analyzer/lda_ci_executable \
+            --file ./processed_data_ci/ci_train_data.memmap \
+            # Adjust num_sequences based on how many files/lines are in temp_data_ci_train after cleaning
+            # and processed by prepare_data.py with max_examples.
+            # Let's assume prepare_data will find at least 2 valid lines from the cleaned files.
+            --num_sequences 2 \ 
             --max_length 32 \
             --dtype int32 \
             --print_seq 1 \
@@ -78,14 +120,14 @@ jobs:
 
       - name: Run train.py (toy model with validation)
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }} # In case tokenizer in train.py needs it
         run: |
           source .venv-ci/bin/activate
           python train.py \
             --memmap_file_train ./processed_data_ci/ci_train_data.memmap \
-            --num_sequences_train 2 \
+            --num_sequences_train 2 \ # Must match what prepare_data_py actually created for train
             --memmap_file_val ./processed_data_ci/ci_val_data.memmap \
-            --num_sequences_val 2 \
+            --num_sequences_val 2 \ # Must match what prepare_data_py actually created for val
             --tokenizer_name_or_path gpt2 \
             --dataset_max_length 32 \
             --dataset_dtype int32 \
@@ -107,6 +149,7 @@ jobs:
           echo "Listing contents of checkpoint directory: ./checkpoints_ci"
           ls -R ./checkpoints_ci
           
+          # Based on num_sequences_train = 2 and batch_size = 1, global_step will be 2.
           MAIN_CKPT_FILE="./checkpoints_ci/lunaris_codex_epoch-1_step-2.pt"
           BEST_MODEL_FILE="./checkpoints_ci/best_model.pt"
 
