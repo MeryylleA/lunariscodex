@@ -1,0 +1,13 @@
+[tool.black]
+line-length = 127
+# exclude = '''
+# /(
+#     \.git
+#   | \.venv.*
+# )/
+# '''
+
+[tool.isort]
+profile = "black"
+line_length = 127
+skip_glob = ["*/.venv*/*"]
