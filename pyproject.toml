@@ -1,13 +1,21 @@
-[tool.black]
+\[tool.black]
 line-length = 127
-# exclude = '''
-# /(
-#     \.git
-#   | \.venv.*
-# )/
-# '''
+exclude = '''
+/(
+    \.git
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv.*  # Adicionado .* para pegar qualquer sufixo
+    | _build
+    | buck-out
+    | build
+    | dist
+    # Adicione outros diretórios que você quer excluir
+)/
+'''
 
 [tool.isort]
 profile = "black"
 line_length = 127
-skip_glob = ["*/.venv*/*"]
+skip_glob = ["*/.venv*/*", "*/__pycache__/*", ".git/*"]
