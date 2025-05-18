@@ -261,7 +261,7 @@ jobs:
             --prompt "Test prompt:" \
             --max_new_tokens 5 \
             --temperature 0.5 \
-            --device cpu \)
+            --device cpu)
           
           # Verificação básica: o script rodou sem erro e produziu algum output?
           if [ $? -eq 0 ] && [ -n "$OUTPUT" ]; then
