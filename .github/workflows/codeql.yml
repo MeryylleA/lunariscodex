@@ -50,24 +50,20 @@ jobs:
       run: |
         echo "Running manual C++ build for CodeQL analysis..."
         echo "Working directory: $(pwd)"
-        echo "Listing contents of data_analyzer:"
-        ls -la data_analyzer || echo "data_analyzer directory not found or empty"
-        echo "Listing contents of data_analyzer/text_cleaner:"
-        ls -la data_analyzer/text_cleaner || echo "data_analyzer/text_cleaner directory not found or empty"
-
-        # Ensure output directories for executables exist if needed by the -o path
-        # If -o just specifies a name, it's created in the current dir of the g++ command.
-        # Assuming your .cpp files are in these locations relative to the repo root:
-        # data_analyzer/lunaris_data_analyzer.cpp
-        # data_analyzer/text_cleaner/lunaris_text_cleaner.cpp
+        
+        echo "Listing contents of data_analyzer/ (for lunaris_data_analyzer.cpp):"
+        ls -la data_analyzer || echo "data_analyzer/ directory not found or lunaris_data_analyzer.cpp is missing."
+        
+        echo "Listing contents of text_cleaner/ (for lunaris_text_cleaner.cpp):"
+        ls -la text_cleaner || echo "text_cleaner/ directory not found or lunaris_text_cleaner.cpp is missing."
 
         echo "Compiling lunaris_data_analyzer..."
-        # Compile from data_analyzer directory, output there
+        # Compile from data_analyzer directory, output there or in a build dir
         (cd data_analyzer && g++ lunaris_data_analyzer.cpp -o lda_ql_build -std=c++17 -g)
         
         echo "Compiling lunaris_text_cleaner..."
-        # Compile from data_analyzer/text_cleaner directory, output there
-        (cd data_analyzer/text_cleaner && g++ lunaris_text_cleaner.cpp -o ltc_ql_build -std=c++17 -g)
+        # Compile from text_cleaner directory, output there or in a build dir
+        (cd text_cleaner && g++ lunaris_text_cleaner.cpp -o ltc_ql_build -std=c++17 -g)
         
         echo "Manual C++ build commands completed."
 
