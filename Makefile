@@ -11,24 +11,20 @@ WARNING_FLAGS := -Wall -Wextra -pedantic
 
 # Release Flags (default)
 OPTIMIZATION_FLAGS := -O2
-DEFINE_FLAGS := -DNDEBUG # Define NDEBUG to disable asserts, etc.
+DEFINE_FLAGS := -DNDEBUG 
 CXXFLAGS_RELEASE := $(CPP_STD) $(WARNING_FLAGS) $(OPTIMIZATION_FLAGS) $(DEFINE_FLAGS)
 
 # Debug Flags
-CXXFLAGS_DEBUG := $(CPP_STD) $(WARNING_FLAGS) -g -O0 # -g for debug symbols, -O0 to disable optimizations
+CXXFLAGS_DEBUG := $(CPP_STD) $(WARNING_FLAGS) -g -O0
 
-# Default flags to use (can be overridden)
-# Por padrão, vamos usar as flags de release.
-# Para compilar com debug, use: make CXXFLAGS_MODE=DEBUG <target>
-# Ou defina CXXFLAGS diretamente: make CXXFLAGS="-std=c++17 -g" <target>
-CXXFLAGS_MODE ?= RELEASE # Default to RELEASE if not set from command line
+CXXFLAGS_MODE ?= RELEASE 
 
 ifeq ($(CXXFLAGS_MODE),DEBUG)
     CURRENT_CXXFLAGS := $(CXXFLAGS_DEBUG)
-    BUILD_TYPE_MSG := "Debug"
+    BUILD_TYPE_MSG := "Debug build" # Sem parênteses
 else
     CURRENT_CXXFLAGS := $(CXXFLAGS_RELEASE)
-    BUILD_TYPE_MSG := "Release (Default)"
+    BUILD_TYPE_MSG := "Release build (Default)" # Sem parênteses
 endif
 
 # --- Text Cleaner ---
@@ -48,63 +44,51 @@ DA_CI_TARGET_NAME := lda_ci_executable
 DA_CI_TARGET := $(DA_DIR)/$(DA_CI_TARGET_NAME)
 
 
-# Default target: build all utilities with default (Release) flags
 all: text_cleaner data_analyzer
 	@echo "----------------------------------------------------"
-	@echo "All standard utilities built with $(BUILD_TYPE_MSG) flags."
+	@echo "All standard utilities built: $(BUILD_TYPE_MSG)."
 	@echo "Executables created:"
 	@echo "  $(TC_TARGET)"
 	@echo "  $(DA_TARGET)"
 	@echo "To build with debug flags, run: make CXXFLAGS_MODE=DEBUG"
 	@echo "----------------------------------------------------"
 
-# Target to build all CI executables
 all_ci: text_cleaner_ci data_analyzer_ci
 	@echo "----------------------------------------------------"
-	@echo "All CI executables built with $(BUILD_TYPE_MSG) flags (CI usually uses Release)."
+	@echo "All CI executables built: $(BUILD_TYPE_MSG) (CI usually uses Release)."
 	@echo "Executables created for CI:"
 	@echo "  $(TC_CI_TARGET)"
 	@echo "  $(DA_CI_TARGET)"
 	@echo "----------------------------------------------------"
 
-
-# --- Individual Build Targets ---
-
-# Target to build only the text cleaner (default: release)
 text_cleaner: $(TC_TARGET)
 
 $(TC_TARGET): $(TC_SRC) Makefile
-	@echo "Building Text Cleaner ($(BUILD_TYPE_MSG))..."
+	@echo "Building Text Cleaner: $(BUILD_TYPE_MSG)..."
 	$(CXX) $(CURRENT_CXXFLAGS) $(TC_SRC) -o $(TC_TARGET)
 	@echo "Text Cleaner built as $(TC_TARGET)"
 
-# Target to build text cleaner specifically for CI (uses default flags, typically Release)
 text_cleaner_ci: $(TC_CI_TARGET)
 
 $(TC_CI_TARGET): $(TC_SRC) Makefile
-	@echo "Building Text Cleaner for CI (using $(BUILD_TYPE_MSG) flags)..."
+	@echo "Building Text Cleaner for CI: $(BUILD_TYPE_MSG)..."
 	$(CXX) $(CURRENT_CXXFLAGS) $(TC_SRC) -o $(TC_CI_TARGET)
 	@echo "Text Cleaner for CI built as $(TC_CI_TARGET)"
 
-
-# Target to build only the data analyzer (default: release)
 data_analyzer: $(DA_TARGET)
 
 $(DA_TARGET): $(DA_SRC) Makefile
-	@echo "Building Data Analyzer ($(BUILD_TYPE_MSG))..."
+	@echo "Building Data Analyzer: $(BUILD_TYPE_MSG)..."
 	$(CXX) $(CURRENT_CXXFLAGS) $(DA_SRC) -o $(DA_TARGET)
 	@echo "Data Analyzer built as $(DA_TARGET)"
 
-# Target to build data analyzer specifically for CI (uses default flags, typically Release)
 data_analyzer_ci: $(DA_CI_TARGET)
 
 $(DA_CI_TARGET): $(DA_SRC) Makefile
-	@echo "Building Data Analyzer for CI (using $(BUILD_TYPE_MSG) flags)..."
+	@echo "Building Data Analyzer for CI: $(BUILD_TYPE_MSG)..."
 	$(CXX) $(CURRENT_CXXFLAGS) $(DA_SRC) -o $(DA_CI_TARGET)
 	@echo "Data Analyzer for CI built as $(DA_CI_TARGET)"
 
-
-# --- Debug Build Targets (Convenience) ---
 debug_text_cleaner:
 	$(MAKE) text_cleaner CXXFLAGS_MODE=DEBUG
 
@@ -114,11 +98,9 @@ debug_data_analyzer:
 debug_all:
 	$(MAKE) all CXXFLAGS_MODE=DEBUG
 
-# --- Clean Target ---
 clean:
 	@echo "Cleaning C++ utilities..."
 	rm -f $(TC_TARGET) $(TC_CI_TARGET) $(DA_TARGET) $(DA_CI_TARGET)
 	@echo "Cleanup complete."
 
-# Phony targets
 .PHONY: all text_cleaner data_analyzer text_cleaner_ci data_analyzer_ci all_ci clean debug_text_cleaner debug_data_analyzer debug_all
