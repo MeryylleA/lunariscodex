@@ -107,7 +107,7 @@ jobs:
             --data_source_type text_file_lines \
             --dataset_name_or_path "./temp_data_ci_train/*" \
             --tokenizer_name_or_path gpt2 \
-            --max_length 32 \
+            --max_length 90 \  # Ajustado para 90, alinhado com analyzer e train.py
             --output_path ./processed_data_ci/ci_train_data.memmap \
             --max_examples 2
 
@@ -116,7 +116,7 @@ jobs:
             --data_source_type text_file_lines \
             --dataset_name_or_path "./temp_data_ci_val/*.py" \
             --tokenizer_name_or_path gpt2 \
-            --max_length 32 \
+            --max_length 90 \  # Ajustado para 90
             --output_path ./processed_data_ci/ci_val_data.memmap \
             --max_examples 2
             
