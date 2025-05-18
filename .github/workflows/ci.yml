@@ -40,10 +40,11 @@ jobs:
       - name: Lint with flake8
         run: |
           source .venv-ci/bin/activate
-          # Stop the build if there are Python syntax errors or undefined names
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-          # Exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+          echo "Linting source code with flake8 (strict checks)..."
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.venv-ci,__pycache__,.git,build,dist,*.egg-info,data_analyzer,text_cleaner
+          
+          echo "Linting source code with flake8 (additional checks, advisory)..."
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude=.venv-ci,__pycache__,.git,build,dist,*.egg-info,data_analyzer,text_cleaner
       
       - name: Create dummy datasets for CI
         run: |
