@@ -90,7 +90,7 @@ jobs:
             --tokenizer_name_or_path gpt2 \
             --max_length 32 \
             --output_path ./processed_data_ci/ci_train_data.memmap \
-            --max_examples 10
+            --max_examples 2  # Ajustado de 10 para 2, para alinhar com num_sequences
 
           echo "--- Preparing Validation Data (raw) for CI ---"
           python prepare_data.py \
@@ -112,7 +112,7 @@ jobs:
           ./data_analyzer/lda_ci_executable \
             --file ./processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
-            --max_length 32 \
+            --max_length 90 \  # Ajustado para 90, refletindo o tamanho real do arquivo
             --dtype int32 \
             --print_seq 1 \
             --top_n_tokens 3 || { echo "Analyzer execution failed"; exit 1; }
@@ -128,9 +128,9 @@ jobs:
             --memmap_file_val ./processed_data_ci/ci_val_data.memmap \
             --num_sequences_val 2 \
             --tokenizer_name_or_path gpt2 \
-            --dataset_max_length 32 \
+            --dataset_max_length 90 \  # Ajustado para 90, alinhado com o analyzer
             --dataset_dtype int32 \
-            --model_max_seq_len 32 \
+            --model_max_seq_len 90 \  # Ajustado para 90
             --d_model 32 \
             --n_layers 1 \
             --n_heads 1 \
