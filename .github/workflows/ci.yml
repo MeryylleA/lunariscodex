@@ -72,8 +72,8 @@ jobs:
             --process-emails --email-placeholder \"[EMAIL]\" \
             --remove-exact-duplicates"
           
-          echo "Executing command: $CLEANER_CMD" # Loga o comando
-          eval $CLEANER_CMD # Executa o comando
+          echo "Executing command: $CLEANER_CMD"
+          eval $CLEANER_CMD
           
           echo "Contents of temp_data_ci_train after cleaning:"
           ls -R ./temp_data_ci_train
@@ -104,16 +104,18 @@ jobs:
       - name: Build and Run C++ Data Analyzer
         run: |
           echo "--- Building and Running lunaris_data_analyzer ---"
-          # Assuming data_analyzer source is in 'data_analyzer/' directory
-          (cd data_analyzer && g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17 -g) # Adicionei -g para debug symbols
+          # Build the analyzer in the data_analyzer directory
+          cd data_analyzer && g++ lunaris_data_analyzer.cpp -o lda_ci_executable -std=c++17 -g || { echo "Compilation failed"; exit 1; }
+          cd ..
           
+          # Execute the analyzer with the correct path
           ./data_analyzer/lda_ci_executable \
-            --file ../processed_data_ci/ci_train_data.memmap \ # Ajustado caminho se lda_ci_executable está em data_analyzer/
+            --file ./processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
             --max_length 32 \
             --dtype int32 \
             --print_seq 1 \
-            --top_n_tokens 3
+            --top_n_tokens 3 || { echo "Analyzer execution failed"; exit 1; }
 
       - name: Run train.py (toy model with validation)
         env:
@@ -122,9 +124,9 @@ jobs:
           source .venv-ci/bin/activate
           python train.py \
             --memmap_file_train ./processed_data_ci/ci_train_data.memmap \
-            --num_sequences_train 2 \ 
+            --num_sequences_train 2 \
             --memmap_file_val ./processed_data_ci/ci_val_data.memmap \
-            --num_sequences_val 2 \ 
+            --num_sequences_val 2 \
             --tokenizer_name_or_path gpt2 \
             --dataset_max_length 32 \
             --dataset_dtype int32 \
