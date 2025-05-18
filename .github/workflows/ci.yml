@@ -86,7 +86,7 @@ jobs:
           echo "--- Preparing Training Data (from cleaned files) for CI ---"
           python prepare_data.py \
             --data_source_type text_file_lines \
-            --dataset_name_or_path "./temp_data_ci_train/*" \ 
+            --dataset_name_or_path "./temp_data_ci_train/*" \
             --tokenizer_name_or_path gpt2 \
             --max_length 32 \
             --output_path ./processed_data_ci/ci_train_data.memmap \
