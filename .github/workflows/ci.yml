@@ -81,27 +81,28 @@ jobs:
         id: cache-data-analyzer
         uses: actions/cache@v3
         with:
-          path: data_analyzer/lunaris_data_analyzer # Cache o executável com o nome definido no Makefile
+          path: data_analyzer/lunaris_data_analyzer
           key: ${{ runner.os }}-data-analyzer-${{ hashFiles('data_analyzer/Makefile', 'data_analyzer/lunaris_data_analyzer.cpp') }}
           restore-keys: |
             ${{ runner.os }}-data-analyzer-
 
-      - name: Build C++ data analyzer (using Makefile)
-        # Este step agora roda condicionalmente se o cache não for encontrado
-        # OU se você quiser sempre reconstruir para pegar mudanças no Makefile não refletidas no hash do .cpp
-        # Para forçar a reconstrução se o Makefile mudar, a chave do cache já inclui 'data_analyzer/Makefile'.
-        # Se o executável não existir após a tentativa de restaurar do cache, construa.
-        # O 'if' abaixo é mais explícito para o caso de o cache falhar em criar o arquivo.
-        if: steps.cache-data-analyzer.outputs.cache-hit != 'true' || !isfile('data_analyzer/lunaris_data_analyzer')
+      - name: Build C++ data analyzer (using Makefile if not cached)
+        # Compila somente se o cache não foi encontrado
+        if: steps.cache-data-analyzer.outputs.cache-hit != 'true'
         working-directory: ./data_analyzer
         run: |
-          echo "Building lunaris_data_analyzer..."
+          echo "Cache miss for lunaris_data_analyzer. Building..."
           make || { echo "C++ compilation failed"; exit 1; }
           
       - name: Test C++ data analyzer
         run: |
+          # Verificar se o arquivo existe antes de tentar executar
+          if [ ! -f "./data_analyzer/lunaris_data_analyzer" ]; then
+            echo "ERROR: lunaris_data_analyzer executable not found after build/cache step!"
+            echo "This might indicate an issue with the build process or caching."
+            exit 1
+          fi
           echo "Executing data analyzer..."
-          # Ajuste o caminho para o executável, se necessário, baseado no TARGET do Makefile
           ./data_analyzer/lunaris_data_analyzer \
             --file ./processed_data_ci/ci_train_data.memmap \
             --num_sequences 2 \
