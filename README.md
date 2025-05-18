@@ -40,10 +40,12 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
     * Robust checkpointing: saves model state, optimizer, scheduler, model configuration, and training arguments. Includes "best model" saving based on validation loss.
     * Detailed metrics logging (loss, perplexity, top-1 accuracy) for training and validation.
     * Optional `torch.compile` support for further optimization.
-* **Text Generation/Inference (`inference.py`):**
-    * Provides a command-line script to load trained Lunaris Codex models from checkpoints.
-    * Generates text autoregressively based on a user-provided prompt.
-    * Supports configurable generation parameters (temperature, top-k, top-p, repetition penalty).
+* **Enhanced Text Generation/Inference (`inference.py` v0.2.0):**
+    * Rich, colorful visual interface with formatted outputs and progress indicators.
+    * Load trained models from checkpoints with detailed model information display.
+    * Generate text autoregressively with configurable parameters (temperature, top-k, top-p, repetition penalty).
+    * Advanced features including prompt loading from files, output saving to files, and detailed parameter visualization.
+    * Beautiful panels for prompt display and generated text output with syntax highlighting.
     * Completes the end-to-end workflow: data preparation → training → inference.
 * **C++ Utility Toolkit (in `data_analyzer/` and `text_cleaner/`):**
     * **`lunaris_data_analyzer`:** A C++ tool for inspecting, validating, and gathering statistics from `.memmap` datasets, with configurable padding ID.
@@ -142,12 +144,16 @@ python train.py \
 ```
 *For a full list of training options and explanations, see the [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) page on our Wiki or run `python train.py --help`.*
 
-### 4. Running Inference (`inference.py`)
+### 4. Running Inference (`inference.py` v0.2.0)
 
-After training your model and saving a checkpoint, you can use `inference.py` to generate text.
+After training your model and saving a checkpoint, you can use the enhanced `inference.py` script to generate text with a beautiful interface.
 
 **Example: Generating text with a trained model:**
 ```bash
+# Install rich library first if you haven't already
+pip install rich
+
+# Run inference with enhanced visual interface
 python inference.py \
     --checkpoint_path ./checkpoints_tutorial/best_model.pt \
     --tokenizer_name_or_path bigcode/starcoder \
@@ -155,7 +161,32 @@ python inference.py \
     --max_new_tokens 100 \
     --temperature 0.7
 ```
-*Replace paths and parameters as needed. Run `python inference.py --help` to see all options.*
+
+**Additional Features in v0.2.0:**
+```bash
+# Load prompt from a file
+python inference.py \
+    --checkpoint_path ./checkpoints_tutorial/best_model.pt \
+    --tokenizer_name_or_path bigcode/starcoder \
+    --prompt_file ./prompts/my_prompt.txt \
+    --max_new_tokens 200
+
+# Save generated output to a file
+python inference.py \
+    --checkpoint_path ./checkpoints_tutorial/best_model.pt \
+    --tokenizer_name_or_path bigcode/starcoder \
+    --prompt "USER: Create a simple web server in Python.\nASSISTANT:" \
+    --output_file ./generated/web_server_code.py
+
+# Disable colored output for terminals that don't support it
+python inference.py \
+    --checkpoint_path ./checkpoints_tutorial/best_model.pt \
+    --tokenizer_name_or_path bigcode/starcoder \
+    --prompt "USER: Explain machine learning.\nASSISTANT:" \
+    --no_color
+```
+
+*Replace paths and parameters as needed. Run `python inference.py --help` for all available options.*
 
 ### 5. Using C++ Utilities (Optional)
 Helper tools for data analysis and text cleaning are available in `data_analyzer/` and `text_cleaner/`. Each contains its own `README.md` with compilation and usage instructions.
@@ -173,7 +204,7 @@ For in-depth information, tutorials, and advanced guides, please visit the **[Lu
 ## Roadmap
 
 Our current focus and future plans include:
-* Further enhancing `inference.py` with features like interactive mode, batch generation, improved visual output, and advanced sampling techniques.
+* Further enhancing `inference.py` with features like interactive mode, batch generation, and advanced sampling techniques.
 * Expanding documentation with more advanced tutorials and API reference details.
 * Providing example configurations and scripts for training on common public datasets (e.g., SlimPajama, The Stack).
 * Benchmarking performance and generation quality across different model sizes and hardware.
