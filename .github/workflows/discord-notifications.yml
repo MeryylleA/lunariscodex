@@ -35,7 +35,7 @@ jobs:
       # --- Notificação para PUSH no MAIN ---
       - name: Send Push Notification
         if: github.event_name == 'push'
-        uses: tsickert/discord-webhook@v6.0.0
+        uses: tsickert/discord-webhook@v7.0.0
         with:
           webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           username: "Lunaris GitHub Bot"
@@ -50,7 +50,7 @@ jobs:
       # --- Notificação para ISSUES ---
       - name: Send Issue Notification
         if: github.event_name == 'issues'
-        uses: tsickert/discord-webhook@v6.0.0
+        uses: tsickert/discord-webhook@v7.0.0
         with:
           webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           username: "Lunaris GitHub Bot"
@@ -74,7 +74,7 @@ jobs:
       # --- Notificação para PULL REQUESTS ---
       - name: Send Pull Request Notification
         if: github.event_name == 'pull_request'
-        uses: tsickert/discord-webhook@v6.0.0
+        uses: tsickert/discord-webhook@v7.0.0
         with:
           webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           username: "Lunaris GitHub Bot"
@@ -98,7 +98,7 @@ jobs:
       # --- Notificação para RELEASES ---
       - name: Send Release Notification
         if: github.event_name == 'release' && (github.event.action == 'published' || github.event.action == 'released')
-        uses: tsickert/discord-webhook@v6.0.0
+        uses: tsickert/discord-webhook@v7.0.0
         with:
           webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           username: "Lunaris GitHub Bot"
@@ -117,7 +117,7 @@ jobs:
       # --- Notificação para ESTRELAS (Watch Started) ---
       - name: Send Star Notification
         if: github.event_name == 'watch' && github.event.action == 'started'
-        uses: tsickert/discord-webhook@v6.0.0
+        uses: tsickert/discord-webhook@v7.0.0
         with:
           webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           username: "Lunaris GitHub Bot"
@@ -127,7 +127,7 @@ jobs:
       # --- Notificação para Atualizações da WIKI (Gollum) ---
       - name: Send Wiki Update Notification
         if: github.event_name == 'gollum' # Evento para alterações na Wiki
-        uses: tsickert/discord-webhook@v6.0.0
+        uses: tsickert/discord-webhook@v7.0.0
         with:
           webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           username: "Lunaris GitHub Bot"
