@@ -1,0 +1,31 @@
+# .github/workflows/auto_merge_pr.yml
+name: Auto Merge PR
+
+on:
+  pull_request_target: # Runs in the context of the base repository, typically with more permissions
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  enable-auto-merge:
+    runs-on: ubuntu-latest
+    # Condition: Only for PRs opened by you (MeryylleA) and that are not drafts.
+    # Add other conditions if necessary (e.g., specific labels).
+    if: github.actor == 'MeryylleA' && github.event.pull_request.draft == false
+
+    steps:
+      - name: Enable GitHub Auto-Merge for Own PRs
+        uses: peter-evans/enable-pull-request-automerge@v3 # Check for the latest version
+        with:
+          # Token: You will need a Personal Access Token (PAT)
+          # with the 'repo' scope (for classic PATs) or appropriate fine-grained permissions.
+          # The default GITHUB_TOKEN might not have sufficient permissions
+          # to enable auto-merge in all scenarios, especially with strict branch protection rules.
+          # Create a PAT, add it as a secret to the repository (e.g., LUNARIS_CODEX_PAT),
+          # and use it here.
+          token: ${{ secrets.LUNARIS_CODEX_PAT }} # Replace with your secret's name
+          pull-request-number: ${{ github.event.pull_request.number }}
+          # merge-method: Optional. If not specified, it will use the default
+          # method configured for the repository or the first one allowed.
+          # Options: merge, squash, rebase.
+          # Example:
+          merge-method: squash
