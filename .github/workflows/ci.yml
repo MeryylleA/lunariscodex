@@ -17,8 +17,9 @@ on:
       - 'requirements.txt'
       - '.github/workflows/ci.yml' 
   pull_request:
-    branches: [ main ]
-    paths: # Same logic for PRs
+    types: [opened, synchronize, reopened, ready_for_review] # Explicit types for PR trigger
+    branches: [ main ] # Only run on PRs targeting main
+    paths: # Same path filtering for PRs
       - 'model.py'
       - 'prepare_data.py'
       - 'train.py'
@@ -166,13 +167,39 @@ jobs:
           fi
           echo "BPE Trainer ran successfully and created output files."
 
-      - name: Final C++ Cleanup for this Job
-        if: always()
+      - name: Post C++ Job Failure Comment & Cleanup
+        # This step runs regardless of previous steps' success or failure,
+        # to ensure comments are posted and cleanup occurs.
+        if: always() 
         run: |
-          make clean || echo "Info: 'make clean' failed or no Makefile. C++ artifacts might not have been cleaned by make."
+          # Post a comment if the job failed and it's a pull request event
+          if [[ "${{ job.status }}" == "failure" && "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "::group::Posting C++ Job Failure Comment"
+            COMMENT_BODY="---
+**Lunaris Codex CI Status: FAILED ❌** 
+Workflow: \`${{ github.workflow }}\`
+Job: \`${{ job.name || github.job }}\` (C++ Utilities Test)
+Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
+
+Some C++ utility checks have failed. Please review the errors.
+➡️ [View Action Logs](\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }})
+
+*This is an automated message from your friendly Lunaris Codex CI.*"
+            # Using gh cli to post/update comment. It needs GITHUB_TOKEN.
+            gh issue comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "$COMMENT_BODY" \
+            || echo "Warning: Failed to post C++ failure comment. Check gh CLI availability or GITHUB_TOKEN permissions for commenting."
+            echo "::endgroup::"
+          fi
+          
+          # Perform cleanup of temporary C++ test files
+          echo "Performing C++ job temporary test files cleanup..."
+          # 'make clean' is commented out to allow caching of executables
+          # make clean || echo "Info: 'make clean' failed. C++ artifacts might not have been cleaned by make."
           rm -rf ./temp_text_cleaner_ci_input ./temp_text_cleaner_ci_output expected_output_tc.txt \
                  ./temp_bpe_corpus ./temp_bpe_output
-          echo "C++ job cleanup complete."
+          echo "C++ job temporary test files cleanup complete."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # gh cli uses GITHUB_TOKEN by default for repo operations
 
   #---------------------------------------------------------------------------
   # JOB 2: Test Python Suite (prepare_data, train, inference, unit tests)
@@ -180,7 +207,7 @@ jobs:
   test_python_suite:
     name: Test Python Suite
     runs-on: ubuntu-latest
-    needs: [] 
+    needs: [] # Can run in parallel if no direct dependency from C++ job
 
     steps:
       - name: Checkout repository
@@ -215,7 +242,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }} 
           files: ./coverage.xml 
           flags: model-tests 
-          # fail_ci_if_error: true 
+          # fail_ci_if_error: true # Uncomment to fail CI if Codecov upload fails
 
       - name: Create dummy datasets for Python script CI
         run: |
@@ -228,7 +255,7 @@ jobs:
 
       - name: Run prepare_data.py for CI datasets
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }} 
+          HF_TOKEN: ${{ secrets.HF_TOKEN }} # If used by your script
         run: |
           python prepare_data.py \
             --data_source_type text_file_lines \
@@ -246,7 +273,7 @@ jobs:
 
       - name: Run train.py (toy model with validation)
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }} 
+          HF_TOKEN: ${{ secrets.HF_TOKEN }} # If used by your script
         run: |
           python train.py \
             --memmap_file_train ./processed_data_ci/ci_train_data.memmap \
@@ -300,11 +327,34 @@ jobs:
             exit 1
           fi
       
-      - name: Final Python CI Cleanup
+      - name: Post Python Job Failure Comment & Cleanup
+        # This step runs regardless of previous steps' success or failure
         if: always()
         run: |
+          # Post a comment if the job failed and it's a pull request event
+          if [[ "${{ job.status }}" == "failure" && "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "::group::Posting Python Job Failure Comment"
+            COMMENT_BODY="---
+**Lunaris Codex CI Status: FAILED ❌** 
+Workflow: \`${{ github.workflow }}\`
+Job: \`${{ job.name || github.job }}\` (Python Suite Test)
+Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
+
+Some Python checks or script executions have failed. Please review the errors.
+➡️ [View Action Logs](\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }})
+
+*This is an automated message from your friendly Lunaris Codex CI.*"
+            # Using gh cli to post/update comment.
+            gh issue comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "$COMMENT_BODY" \
+            || echo "Warning: Failed to post Python failure comment. Check gh CLI availability or GITHUB_TOKEN permissions for commenting."
+            echo "::endgroup::"
+          fi
+
+          # Perform cleanup of temporary Python CI files
           echo "Cleaning up Python CI temporary files..."
           rm -rf ./temp_data_ci_train ./temp_data_ci_val \
                  ./processed_data_ci ./checkpoints_ci \
                  ./coverage.xml
           echo "Python CI cleanup process complete."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # gh cli uses GITHUB_TOKEN by default
