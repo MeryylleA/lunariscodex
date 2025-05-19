@@ -41,8 +41,8 @@ rich>=13.0.0               # For beautiful and informative command-line interfac
                              # Refer to the official flash-attn repository for specific version compatibility.
 
 # --- Development & Testing ---
-# pytest>=7.0.0              # For running unit tests.
-# pytest-cov>=4.0.0          # For test coverage reporting.
+pytest>=7.0.0              # For running unit tests.
+pytest-cov>=4.0.0          # For test coverage reporting.
 # flake8>=6.0.0              # For Python style guide enforcement.
 # black>=23.0.0              # For opinionated Python code formatting.
 # isort>=5.10.0              # For sorting Python imports.
