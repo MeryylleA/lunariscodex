@@ -48,8 +48,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install C++ dependencies (nlohmann-json)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y nlohmann-json3-dev # Common package name for nlohmann json v3
+
       - name: Initial C++ Artifact Cleanup (Best Effort)
-        run: | # <<< MODIFICAÇÃO AQUI
+        run: |
           make clean || echo "Pre-run 'make clean' info: No Makefile/artifacts or clean failed, proceeding."
 
       - name: Cache C++ build artifacts (executables)
@@ -161,7 +166,7 @@ jobs:
 
       - name: Final C++ Cleanup for this Job
         if: always()
-        run: | # <<< MODIFICAÇÃO AQUI TAMBÉM (para consistência e prevenção)
+        run: |
           make clean || echo "Info: 'make clean' failed or no Makefile. C++ artifacts might not have been cleaned by make."
           rm -rf ./temp_text_cleaner_ci_input ./temp_text_cleaner_ci_output expected_output_tc.txt \
                  ./temp_bpe_corpus ./temp_bpe_output
