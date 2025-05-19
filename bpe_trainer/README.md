@@ -1,6 +1,6 @@
 # Lunaris BPE Tokenizer Trainer (bpe_trainer)
 
-**Version: 0.1.0** (Ou a versão inicial que você preferir)
+**Version: 0.1.0**
 
 The `Lunaris BPE Tokenizer Trainer` is a command-line utility written in C++ designed to learn Byte Pair Encoding (BPE) merges from a given text corpus. It generates a vocabulary and a list of merge operations that can be used to build a BPE-based subword tokenizer.
 
