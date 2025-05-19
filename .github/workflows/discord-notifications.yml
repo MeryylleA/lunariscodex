@@ -1,6 +1,6 @@
 # .github/workflows/discord-notifications.yml
 
-name: GitHub Activity to Discord
+name: GitHub to Discord Notifications # Renamed for clarity
 
 on:
   push:
@@ -10,38 +10,48 @@ on:
   pull_request:
     types: [opened, edited, closed, reopened, labeled, unlabeled, synchronize, ready_for_review, review_requested]
   release:
-    types: [published]
+    types: [published] # Typically, 'published' is enough for a user-facing notification
   watch: 
     types: [started]
-  gollum:
+  gollum: # Wiki page updates
   workflow_dispatch:
 
 permissions:
-  contents: read    
-  issues: read      
-  pull-requests: read 
+  contents: read    # Needed to read repository metadata, commit messages
+  issues: read      # Needed to read issue data
+  pull-requests: read # Needed to read pull request data
 
 jobs:
   notify_discord:
     name: Send Discord Notification
     runs-on: ubuntu-latest
+    # Ensure this job only runs if the secret is available
     if: secrets.DISCORD_WEBHOOK_URL != ''
     steps:
+      # Checkout is usually not strictly needed for just sending event data,
+      # but some more complex message constructions might reference local files (e.g., templates).
+      # Keeping it for now, but can be removed if not used.
+      # - name: Checkout Code
+      #   uses: actions/checkout@v4
+
+      # Common parameters for the Discord webhook action
       - name: Set Common Webhook Parameters
         id: common_params
         run: |
           echo "BOT_USERNAME=Lunaris GitHub Bot" >> $GITHUB_ENV
           echo "BOT_AVATAR_URL=https://avatars.githubusercontent.com/u/109653559?s=200&v=4" >> $GITHUB_ENV
-          echo "COLOR_GREEN=3066993" >> $GITHUB_ENV
-          echo "COLOR_RED=15158332" >> $GITHUB_ENV
-          echo "COLOR_PURPLE=8311585" >> $GITHUB_ENV
-          echo "COLOR_BLUE=3447003" >> $GITHUB_ENV
-          echo "COLOR_GOLD=16705372" >> $GITHUB_ENV
-          echo "COLOR_LIGHTBLUE=7506394" >> $GITHUB_ENV
+          # Define some common colors (decimal values)
+          echo "COLOR_GREEN=3066993" >> $GITHUB_ENV    # Opened, Reopened, Success
+          echo "COLOR_RED=15158332" >> $GITHUB_ENV     # Closed, Error
+          echo "COLOR_PURPLE=8311585" >> $GITHUB_ENV  # Merged
+          echo "COLOR_BLUE=3447003" >> $GITHUB_ENV     # Default/Info
+          echo "COLOR_GOLD=16705372" >> $GITHUB_ENV    # Release
+          echo "COLOR_LIGHTBLUE=7506394" >> $GITHUB_ENV # Wiki, Star
 
+      # --- Push Notification ---
       - name: Send Push Notification
         if: github.event_name == 'push'
-        uses: tsickert/discord-webhook@v6.0.0
+        uses: tsickert/discord-webhook@v6.0.0 # Using v6 for stable embed JSON support
         with:
           webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           username: ${{ env.BOT_USERNAME }}
@@ -50,9 +60,10 @@ jobs:
             🚀 **Push to `main` by @${{ github.actor }}**
             Total Commits: ${{ github.event.commits && github.event.commits_count || '1' }}
             Compare changes: ${{ github.event.compare }}
-            Head Commit Message: `${{ github.event.head_commit.message || 'N/A' }}`
-            Commit SHA: [`${{ github.event.head_commit.id && github.event.head_commit.id.slice(0,7) || 'N/A' }}`](${{ github.event.head_commit.url || '#' }})
+            Head Commit: `${{ github.event.head_commit.message || 'N/A' }}`
+            ([`${{ github.event.head_commit.id && github.event.head_commit.id.slice(0,7) || 'N/A' }}`](${{ github.event.head_commit.url || '#' }}))
 
+      # --- Issue Notification ---
       - name: Send Issue Notification
         if: github.event_name == 'issues'
         uses: tsickert/discord-webhook@v6.0.0
@@ -65,17 +76,18 @@ jobs:
               {
                 "title": "🐛 Issue ${{ github.event.action }}: #${{ github.event.issue.number }} - ${{ github.event.issue.title || 'Untitled Issue' }}",
                 "url": "${{ github.event.issue.html_url }}",
-                "description": "**By @${{ github.event.issue.user.login || 'unknown user' }}**\n${{ github.event.issue.body || 'No description provided.' }}",
+                "description": "**By @${{ github.event.issue.user.login || 'unknown user' }}**\n${{ (github.event.issue.body || 'No description provided.') | truncate: 1800 }}",
                 "color": "${{ (github.event.action == 'opened' || github.event.action == 'reopened') && env.COLOR_GREEN || (github.event.action == 'closed') && env.COLOR_RED || env.COLOR_BLUE }}",
                 "fields": [
                   { "name": "Status", "value": "${{ github.event.issue.state }}", "inline": true },
                   { "name": "Labels", "value": "${{ join(github.event.issue.labels.*.name, ', ') || 'None' }}", "inline": true }
                   ${{ github.event.assignee && format(',{"name": "Assignee", "value": "@%s", "inline": true}', github.event.assignee.login) || '' }}
                 ],
-                "timestamp": "${{ github.event.issue.updated_at || github.event.timestamp }}"
+                "timestamp": "${{ github.event.issue.updated_at || github.context.timestamp }}"
               }
             ]
 
+      # --- Pull Request Notification ---
       - name: Send Pull Request Notification
         if: github.event_name == 'pull_request'
         uses: tsickert/discord-webhook@v6.0.0
@@ -88,17 +100,18 @@ jobs:
               {
                 "title": "🔄 PR #${{ github.event.pull_request.number }} (${{ github.event.action }}): ${{ github.event.pull_request.title || 'Untitled PR' }}",
                 "url": "${{ github.event.pull_request.html_url }}",
-                "description": "From `${{ github.event.pull_request.head.ref }}` into `${{ github.event.pull_request.base.ref }}` by @${{ github.event.pull_request.user.login || 'unknown user' }}\n${{ github.event.pull_request.body || 'No description provided.' }}",
+                "description": "From `${{ github.event.pull_request.head.ref }}` into `${{ github.event.pull_request.base.ref }}` by @${{ github.event.pull_request.user.login || 'unknown user' }}\n${{ (github.event.pull_request.body || 'No description provided.') | truncate: 1800 }}",
                 "color": "${{ (github.event.action == 'opened' || github.event.action == 'reopened' || github.event.action == 'ready_for_review') && env.COLOR_GREEN || (github.event.pull_request.merged == true && github.event.action == 'closed') && env.COLOR_PURPLE || (github.event.pull_request.merged == false && github.event.action == 'closed') && env.COLOR_RED || env.COLOR_BLUE }}",
                 "fields": [
                   { "name": "Status", "value": "${{ github.event.pull_request.merged && 'Merged ✨' || github.event.pull_request.draft && 'Draft 📝' || github.event.pull_request.state }}", "inline": true },
                   { "name": "Commits", "value": "${{ github.event.pull_request.commits }}", "inline": true },
                   { "name": "Changes", "value": "+${{ github.event.pull_request.additions }} / -${{ github.event.pull_request.deletions }} in ${{ github.event.pull_request.changed_files }} file(s)", "inline": false }
                 ],
-                "timestamp": "${{ github.event.pull_request.updated_at || github.event.timestamp }}"
+                "timestamp": "${{ github.event.pull_request.updated_at || github.context.timestamp }}"
               }
             ]
 
+      # --- Release Notification ---
       - name: Send Release Notification
         if: github.event_name == 'release' && github.event.action == 'published'
         uses: tsickert/discord-webhook@v6.0.0
@@ -111,12 +124,13 @@ jobs:
               {
                 "title": "🎉 New Release Published: ${{ github.event.release.name || github.event.release.tag_name }}",
                 "url": "${{ github.event.release.html_url }}",
-                "description": "Published by @${{ github.event.release.author.login || 'unknown user' }}\n${{ github.event.release.body || 'See the release notes for details.' }}",
+                "description": "Published by @${{ github.event.release.author.login || 'unknown user' }}\n${{ (github.event.release.body || 'See the release notes for details.') | truncate: 1800 }}",
                 "color": "${{ env.COLOR_GOLD }}",
-                "timestamp": "${{ github.event.release.published_at || github.event.timestamp }}"
+                "timestamp": "${{ github.event.release.published_at || github.context.timestamp }}"
               }
             ]
 
+      # --- Star Notification ---
       - name: Send Star Notification
         if: github.event_name == 'watch' && github.event.action == 'started'
         uses: tsickert/discord-webhook@v6.0.0
@@ -126,6 +140,7 @@ jobs:
           avatar-url: ${{ env.BOT_AVATAR_URL }}
           content: "⭐ **@${{ github.sender.login }} just starred Lunaris Codex!** Total stars: ${{ github.event.repository.stargazers_count }} ✨ Thank you! 🙏"
 
+      # --- Wiki Update Notification (Gollum event) ---
       - name: Send Wiki Update Notification
         if: github.event_name == 'gollum'
         uses: tsickert/discord-webhook@v6.0.0
@@ -137,9 +152,9 @@ jobs:
             [
               {
                 "title": "📚 Wiki Pages Updated by @${{ github.sender.login || 'unknown user' }}",
-                "description": "The following page(s) were affected:\n- ${{ join(github.event.pages.*.page_name, '\n- ') }}\n\nCompare changes: ${{ github.event.repository.html_url }}/wiki/_compare/${{ github.event.pages[0].sha }}...${{ github.event.pages[github.event.pages_count -1].sha }}",
-                "url": "${{ github.event.pages[0].html_url || github.event.repository.html_url }}/wiki",
+                "description": "The following page(s) were affected:\n${{ join(github.event.pages.*.page_name, '\n- ') }} \n\nSee changes: ${{ github.event.repository.html_url }}/wiki/_compare/${{ github.event.pages[0].sha }}",
+                "url": "${{ github.event.pages[0].html_url || github.event.repository.html_url_wiki }}",
                 "color": "${{ env.COLOR_LIGHTBLUE }}",
-                "timestamp": "${{ github.event.timestamp }}"
+                "timestamp": "${{ github.context.timestamp }}"
               }
             ]
