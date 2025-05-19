@@ -142,7 +142,6 @@ jobs:
           echo "this is a test corpus for bpe" > ./temp_bpe_corpus/corpus1.txt
           echo "another line for the bpe test" >> ./temp_bpe_corpus/corpus1.txt
           echo "lunaris codex bpe trainer example" > ./temp_bpe_corpus/corpus2.txt
-          # Concatenate corpus files into one for the trainer
           cat ./temp_bpe_corpus/corpus1.txt ./temp_bpe_corpus/corpus2.txt > ./temp_bpe_corpus/combined_corpus.txt
           mkdir -p ./temp_bpe_output
 
@@ -151,21 +150,16 @@ jobs:
           BPE_TRAINER_EXEC="./${{ steps.set_exec_paths.outputs.bpe_trainer_exec }}"
           if [ ! -f "$BPE_TRAINER_EXEC" ]; then echo "ERROR: BPE Trainer executable '$BPE_TRAINER_EXEC' not found!"; exit 1; fi
           
-          # Based on your help output: --corpus FILE --output DIR --vocab-size N --mode LEVEL
-          # Assuming --output DIR means it creates files like DIR_vocab.json, DIR_merges.txt or inside DIR
-          # The example shows --output ./my_bpe_model -> my_bpe_model_vocab.json etc.
-          # So, ./temp_bpe_output/ci_bpe as value for --output should produce 
-          # ./temp_bpe_output/ci_bpe_vocab.json and ./temp_bpe_output/ci_bpe_merges.txt
-          # Adjust the output file check below if this assumption is wrong.
           "$BPE_TRAINER_EXEC" \
             --corpus ./temp_bpe_corpus/combined_corpus.txt \
-            --vocab-size 280 \
+            --vocab_size 280 \
             --output ./temp_bpe_output/ci_bpe \
             --mode byte || { echo "BPE Trainer execution failed"; exit 1; }
             
-          # Adjust these filenames if --output ./temp_bpe_output/ci_bpe creates files with different names/paths
-          if [ ! -f "./temp_bpe_output/ci_bpe_vocab.json" ] || [ ! -f "./temp_bpe_output/ci_bpe_merges.txt" ]; then
-            echo "ERROR: BPE Trainer output files (e.g., ./temp_bpe_output/ci_bpe_vocab.json) not found!"
+          if [ ! -f "./temp_bpe_output/ci_bpe/bpe_model_lunaris.json" ] || \
+             [ ! -f "./temp_bpe_output/ci_bpe/merges_lunaris.txt" ] || \
+             [ ! -f "./temp_bpe_output/ci_bpe/vocabulary_lunaris.txt" ]; then
+            echo "ERROR: BPE Trainer output files (e.g., ./temp_bpe_output/ci_bpe/bpe_model_lunaris.json) not found!"
             echo "Listing contents of ./temp_bpe_output/ :"
             ls -R ./temp_bpe_output
             exit 1
@@ -212,6 +206,7 @@ jobs:
 
       - name: Run Pytest for model.py (Unit Tests)
         run: |
+          export PYTHONPATH=$PYTHONPATH:$(pwd) # Add current (root) directory to PYTHONPATH
           pytest tests/ -k "test_model" --cov=model --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage to Codecov
