@@ -1,6 +1,4 @@
 [![Lunaris Codex CI](https://github.com/MeryylleA/lunariscodex/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MeryylleA/lunariscodex/actions/workflows/ci.yml)
-[![Test prepare_data.py with Multiple Tokenizers](https://github.com/MeryylleA/lunariscodex/actions/workflows/test_prepare_data_tokenizers.yml/badge.svg?branch=main)](https://github.com/MeryylleA/lunariscodex/actions/workflows/test_prepare_data_tokenizers.yml)
-[![Test Model Module](https://github.com/MeryylleA/lunariscodex/actions/workflows/test_model_module.yml/badge.svg?branch=main)](https://github.com/MeryylleA/lunariscodex/actions/workflows/test_model_module.yml)
 
 # Lunaris Codex
 
@@ -46,18 +44,16 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
     *   Autoregressive text generation with configurable parameters (temperature, top-k, top-p, repetition penalty).
     *   Features prompt loading from files, output saving, and a `--no_color` option.
 *   **C++ Utility Toolkit:**
+    *   **`bpe_trainer` (v0.1.0 - NEW!):** Trains BPE merges from a corpus, enabling the creation of custom tokenizers.
     *   **`lunaris_data_analyzer` (v0.2.0):** Inspects `.memmap` datasets, now with configurable `--pad_id`.
-    *   **`lunaris_text_cleaner` (v0.3.5):** Cleans raw text, with improved multi-stage HTML cleaning (DOCTYPE, comments, scripts, styles, tags).
+    *   **`lunaris_text_cleaner` (v0.3.5):** Cleans raw text, with improved multi-stage HTML cleaning.
 *   **Scalable and Tested:**
     *   Full E2E pipeline (data prep → train → inference) demonstrated with a ~3M parameter toy model on CPU.
-*   **Continuous Integration:**
-    *   GitHub Actions workflows test:
+*   **Continuous Integration (CI):**
+    *   A comprehensive GitHub Actions workflow (`ci.yml`) tests:
         *   Core Python pipeline (`prepare_data.py`, `train.py`, `inference.py` smoke test).
-        *   C++ utilities.
-        *   `prepare_data.py` with multiple tokenizers.
-        *   `model.py` unit tests with `pytest` and Codecov.io integration.
-*   **CodeQL Security Scanning:** Integrated for static analysis.
-
+        *   Compilation and basic functionality of C++ utilities (`bpe_trainer`, `lunaris_text_cleaner`, `lunaris_data_analyzer`).
+        *   `model.py` unit tests using `pytest`, with coverage reports sent to Codecov.io.
 ---
 
 ## Architecture Overview
@@ -75,7 +71,7 @@ Lunaris Codex implements a standard decoder-only Transformer architecture with s
 
 ## Getting Started
 
-This section outlines the basic steps to get Lunaris Codex up and running. Note that training effective Large Language Models typically requires substantial datasets and computational resources. Please refer to the wiki for detailed guides.
+This section outlines the basic steps to get Lunaris Codex up and running. Note that training effective Large Language Models typically requires substantial datasets and computational resources.
 
 For more detailed guides and tutorials on each step, please refer to the **[Project Wiki](https://github.com/MeryylleA/lunariscodex/wiki)**.
 
@@ -159,10 +155,11 @@ python inference.py \
 *Run `python inference.py --help` for all options, including loading prompts from files (`--prompt_file`), saving output (`--output_file`), and disabling rich formatting (`--no_color`).*
 
 ### 5. Using C++ Utilities (Optional)
-Helper tools for data analysis, text cleaning, and tokenizer training are available. Each contains its own `README.md` with compilation and usage instructions.
-*   **`bpe_trainer`**: Trains BPE merges from a corpus to help create custom tokenizers. (Located in `bpe_trainer/`)
-*   **`lunaris_text_cleaner`**: Cleans raw text files before tokenization. (Located in `text_cleaner/`)
-*   **`lunaris_data_analyzer`**: Inspects and validates `.memmap` dataset files. (Located in `data_analyzer/`)
+Helper tools for data analysis, text cleaning, and tokenizer training are available. Each utility is located in its own directory (e.g., `bpe_trainer/`, `text_cleaner/`, `data_analyzer/`) and includes a `README.md` with specific compilation and usage instructions. They can also be compiled using the main `Makefile` at the root of the repository (e.g., `make bpe_trainer`).
+
+*   **`bpe_trainer`**: Trains BPE merges from a corpus to help create custom tokenizers.
+*   **`lunaris_text_cleaner`**: Cleans raw text files before tokenization.
+*   **`lunaris_data_analyzer`**: Inspects and validates `.memmap` dataset files.
 
 ---
 
@@ -170,11 +167,14 @@ Helper tools for data analysis, text cleaning, and tokenizer training are availa
 
 For in-depth information, tutorials, and advanced guides, please visit the **[Lunaris Codex Project Wiki](https://github.com/MeryylleA/lunariscodex/wiki)**.  
 Key pages include:
+*   **[Home](https://github.com/MeryylleA/lunariscodex/wiki/Home)** (Start here for an overview of the Wiki content)
 *   **[Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines)** (Guidance on data scale, hardware, and achieving good results)
 *   [Data Preparation Pipeline](https://github.com/MeryylleA/lunariscodex/wiki/Data-Preparation-Pipeline) (`prepare_data.py`)
 *   [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) (`train.py`)
-*   [Utility: Lunaris Text Cleaner](https://github.com/MeryylleA/lunariscodex/wiki/Lunaris-Text-Cleaner)
-*   [Utility: Lunaris Data Analyzer](https://github.com/MeryylleA/lunariscodex/wiki/Lunaris-Data-Analyzer)
+*   [Utility: BPE Trainer](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-BPE-Trainer) **(New!)**
+*   [Utility: Lunaris Text Cleaner](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Text-Cleaner)
+*   [Utility: Lunaris Data Analyzer](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Data-Analyzer)
+*   [Tutorial: Training Your First Model](https://github.com/MeryylleA/lunariscodex/wiki/Training-Your-First-Model)
 *   [Tutorial: Using the Lunaris-Data Dataset](https://github.com/MeryylleA/lunariscodex/wiki/Using-the-Lunaris-Data-Dataset)
 
 ---
@@ -184,7 +184,8 @@ Key pages include:
 Our current focus and future plans include:
 *   Further enhancing `inference.py` with features like interactive mode, batch generation, improved visual output, and advanced sampling techniques.
 *   Expanding documentation: advanced tutorials, API reference, and more details for the **[Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines)**.
-*   **Providing pre-tokenized versions of common public datasets or robust scripts to process them efficiently.**
+*   **Integrating custom BPE tokenizers (trained with `bpe_trainer`) into the `prepare_data.py` script.**
+*   Providing pre-tokenized versions of common public datasets or robust scripts to process them efficiently.
 *   Example configurations for training on large-scale datasets like SlimPajama or The Stack.
 *   Benchmarking performance and generation quality across different model sizes and hardware.
 *   Exploring further optimizations such as gradient checkpointing and quantization techniques.
@@ -205,7 +206,7 @@ See [`LICENSE`](LICENSE) for more details.
 
 Developed by **Francisco Antonio** ([@MeryylleA](https://github.com/MeryylleA) on GitHub, [@Meryylle](https://x.com/a93918) on X/Twitter).
 
-Lunaris Codex is an open-source endeavor. Contributions, feedback, bug reports, and feature requests are highly encouraged! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) guidelines and join our community. (https://discord.gg/JNsfzEwMtC)
+Lunaris Codex is an open-source endeavor. Contributions, feedback, bug reports, and feature requests are highly encouraged! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) guidelines and join our community. (Discord: [Moon Cloud Services](https://discord.gg/JNsfzEwMtC) - Lunaris Codex has a dedicated section here)
 
 Let's build something amazing together!
 
