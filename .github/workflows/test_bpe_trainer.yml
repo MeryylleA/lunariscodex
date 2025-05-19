@@ -1,0 +1,92 @@
+# .github/workflows/test_bpe_trainer.yml
+
+name: Test BPE Trainer (C++)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'bpe_trainer/**' 
+      - '.github/workflows/test_bpe_trainer.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'bpe_trainer/**'
+      - '.github/workflows/test_bpe_trainer.yml'
+  workflow_dispatch:
+
+jobs:
+  test-bpe-trainer:
+    name: Compile and Test bpe_trainer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        # fetch-depth: 0 # Not strictly needed if json.hpp is installed via apt
+
+      - name: Install nlohmann-json library
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y nlohmann-json3-dev # Installs system-wide headers for nlohmann::json
+
+      - name: Compile bpe_trainer (using Makefile)
+        run: |
+          echo "Compiling bpe_trainer for CI using Makefile..."
+          # The Makefile will now find nlohmann/json.hpp from system paths
+          make bpe_trainer_ci || { echo "BPE Trainer compilation failed"; exit 1; }
+
+      - name: Create dummy corpus for BPE trainer CI
+        run: |
+          mkdir -p ./temp_bpe_ci_input
+          cat <<EOF > ./temp_bpe_ci_input/ci_corpus.txt
+          this is a test corpus.
+          another line for testing bpe.
+          repeated repeated words words.
+          aaabbbccc aaabbbccc
+          special chars !@#$ !@#$
+          EOF
+          mkdir -p ./temp_bpe_ci_output_byte ./temp_bpe_ci_output_word
+
+      - name: Run BPE Trainer (Byte Level)
+        run: |
+          echo "Running BPE Trainer in Byte Level mode..."
+          ./bpe_trainer/bpe_trainer_ci_executable \
+            --corpus ./temp_bpe_ci_input/ci_corpus.txt \
+            --output ./temp_bpe_ci_output_byte \
+            --vocab-size 280 \
+            --mode byte \
+            --verbose || { echo "BPE Trainer (Byte Level) execution failed"; exit 1; }
+          
+          echo "Checking byte-level output files..."
+          ls -l ./temp_bpe_ci_output_byte/
+          [ -f ./temp_bpe_ci_output_byte/bpe_model_lunaris.json ] || { echo "bpe_model_lunaris.json not found for byte mode!"; exit 1; }
+          [ -f ./temp_bpe_ci_output_byte/vocabulary_lunaris.txt ] || { echo "vocabulary_lunaris.txt not found for byte mode!"; exit 1; }
+          [ -f ./temp_bpe_ci_output_byte/merges_lunaris.txt ] || { echo "merges_lunaris.txt not found for byte mode!"; exit 1; }
+          echo "Byte-level BPE trainer ran and created output files."
+
+      - name: Run BPE Trainer (Word Level)
+        run: |
+          echo "Running BPE Trainer in Word Level mode..."
+          ./bpe_trainer/bpe_trainer_ci_executable \
+            --corpus ./temp_bpe_ci_input/ci_corpus.txt \
+            --output ./temp_bpe_ci_output_word \
+            --vocab-size 50 \
+            --mode word \
+            --verbose || { echo "BPE Trainer (Word Level) execution failed"; exit 1; }
+
+          echo "Checking word-level output files..."
+          ls -l ./temp_bpe_ci_output_word/
+          [ -f ./temp_bpe_ci_output_word/bpe_model_lunaris.json ] || { echo "bpe_model_lunaris.json not found for word mode!"; exit 1; }
+          [ -f ./temp_bpe_ci_output_word/vocabulary_lunaris.txt ] || { echo "vocabulary_lunaris.txt not found for word mode!"; exit 1; }
+          [ -f ./temp_bpe_ci_output_word/merges_lunaris.txt ] || { echo "merges_lunaris.txt not found for word mode!"; exit 1; }
+          echo "Word-level BPE trainer ran and created output files."
+
+      - name: Clean up BPE CI artifacts
+        if: always()
+        run: |
+          echo "Cleaning up BPE CI test artifacts..."
+          # make clean will remove the executable from bpe_trainer/
+          make clean || echo "Warning: 'make clean' during BPE test failed or no Makefile, proceeding with manual rm."
+          rm -rf ./temp_bpe_ci_input ./temp_bpe_ci_output_byte ./temp_bpe_ci_output_word
+          echo "BPE CI cleanup complete."
