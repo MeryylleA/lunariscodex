@@ -2,26 +2,39 @@
 name: Auto Merge PR
 
 on:
-  pull_request_target: # Runs in the context of the base repository, typically with more permissions
+  pull_request_target: 
     types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
   enable-auto-merge:
     runs-on: ubuntu-latest
-    # Condition: Only for PRs opened by you (MeryylleA) and that are not drafts.
     if: github.actor == 'MeryylleA' && github.event.pull_request.draft == false
 
     steps:
       - name: Enable GitHub Auto-Merge for Own PRs
-        uses: peter-evans/enable-pull-request-automerge@v3 # Check for the latest version
+        id: auto_merge_step # Give an ID to the step to check its outcome
+        uses: peter-evans/enable-pull-request-automerge@v3 
         with:
-          # Token: You will need a Personal Access Token (PAT)
-          # with the 'repo' scope (for classic PATs) or appropriate fine-grained permissions.
-          # Create a PAT, add it as a secret to the repository (e.g., LUNARIS_CODEX_PAT),
-          # and use it here.
-          token: ${{ secrets.LUNARIS_CODEX_PAT }} # Replace with your secret's name
+          token: ${{ secrets.LUNARIS_CODEX_PAT }} 
           pull-request-number: ${{ github.event.pull_request.number }}
-          # merge-method: Optional. If not specified, it will use the default
-          # method configured for the repository or the first one allowed.
-          # Options: merge, squash, rebase.
           merge-method: squash
+
+      - name: Comment on PR about Auto-Merge Status
+        # Run if the previous step (enable-auto-merge) was successful
+        # AND only for pull requests (not other event types that might trigger this job in future)
+        if: steps.auto_merge_step.outcome == 'success' && github.event_name == 'pull_request_target'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.LUNARIS_CODEX_PAT }} # Use PAT for consistency or if GITHUB_TOKEN lacks permission
+          repository: ${{ github.repository }}
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-identifier: auto-merge-status-comment # Unique ID for this type of comment
+          edit-mode: replace # Replace previous auto-merge status comment
+          body: |
+            ---
+            **🤖 Lunaris Codex Auto-Merge Bot:**
+
+            Auto-merge has been **enabled** for this Pull Request (method: `squash`).
+            Merging will proceed automatically once all required checks pass and other conditions are met.
+
+            *Monitoring status...* ✨
