@@ -152,7 +152,7 @@ jobs:
           
           "$BPE_TRAINER_EXEC" \
             --corpus ./temp_bpe_corpus/combined_corpus.txt \
-            --vocab-size 280 \ # <<< MODIFIED HERE: vocab-size (com hífen)
+            --vocab-size 280 \
             --output ./temp_bpe_output/ci_bpe \
             --mode byte || { echo "BPE Trainer execution failed"; exit 1; }
             
