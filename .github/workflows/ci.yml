@@ -49,7 +49,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Initial C++ Artifact Cleanup (Best Effort)
-        run: make clean || echo "Pre-run 'make clean' info: No Makefile/artifacts or clean failed, proceeding."
+        run: | # <<< MODIFICAÇÃO AQUI
+          make clean || echo "Pre-run 'make clean' info: No Makefile/artifacts or clean failed, proceeding."
 
       - name: Cache C++ build artifacts (executables)
         id: cache-cpp-executables
@@ -158,23 +159,9 @@ jobs:
           echo "BPE Trainer ran successfully and created output files."
           # Add content checks if necessary
 
-      # Note: Data Analyzer test (if it uses mock data independent of Python scripts) would go here.
-      # If it needs data from prepare_data.py, it should be in the Python job or this job needs artifacts.
-      # For now, assuming it's tested based on some self-contained C++ logic or mock .memmap files.
-      # If you have a simple test for lunaris_data_analyzer similar to the above, add it here. Example:
-      # - name: Run and Test C++ Data Analyzer
-      #   run: |
-      #     DATA_ANALYZER_EXEC="./${{ steps.set_exec_paths.outputs.data_analyzer_exec }}"
-      #     if [ ! -f "$DATA_ANALYZER_EXEC" ]; then echo "ERROR: Data Analyzer executable '$DATA_ANALYZER_EXEC' not found!"; exit 1; fi
-      #     # Create a dummy .memmap file or use one in the repo for testing
-      #     # ./create_dummy_memmap_for_analyzer.sh
-      #     "$DATA_ANALYZER_EXEC" --file ./path_to_dummy_data.memmap ... || { echo "Data Analyzer execution failed"; exit 1; }
-      #     echo "Data Analyzer test passed."
-
-
       - name: Final C++ Cleanup for this Job
         if: always()
-        run: |
+        run: | # <<< MODIFICAÇÃO AQUI TAMBÉM (para consistência e prevenção)
           make clean || echo "Info: 'make clean' failed or no Makefile. C++ artifacts might not have been cleaned by make."
           rm -rf ./temp_text_cleaner_ci_input ./temp_text_cleaner_ci_output expected_output_tc.txt \
                  ./temp_bpe_corpus ./temp_bpe_output
@@ -255,17 +242,6 @@ jobs:
             --tokenizer_name_or_path gpt2 \
             --output_path ./processed_data_ci/ci_val_data.memmap \
             --max_length 32 --max_examples 2 --overwrite_output
-
-      # If lunaris_data_analyzer needs to be tested on data produced by prepare_data.py:
-      # 1. `test_python_suite` job would need `needs: [build_and_test_cpp]`.
-      # 2. Use `build_and_test_cpp.outputs.data_analyzer_exec` to get the path.
-      # 3. Download the executable as an artifact if outputs are not sufficient (more complex).
-      # - name: Test C++ Data Analyzer on prepared data
-      #   env:
-      #     DATA_ANALYZER_EXEC_PATH: ${{ needs.build_and_test_cpp.outputs.data_analyzer_exec }}
-      #   run: |
-      #     ./"$DATA_ANALYZER_EXEC_PATH" --file ./processed_data_ci/ci_train_data.memmap ...
-
 
       - name: Run train.py (toy model with validation)
         env:
