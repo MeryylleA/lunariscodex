@@ -159,9 +159,10 @@ python inference.py \
 *Run `python inference.py --help` for all options, including loading prompts from files (`--prompt_file`), saving output (`--output_file`), and disabling rich formatting (`--no_color`).*
 
 ### 5. Using C++ Utilities (Optional)
-Helper tools for data analysis and text cleaning are available in `data_analyzer/` and `text_cleaner/`. Each contains its own `README.md` with compilation and usage instructions.
-*   **`lunaris_text_cleaner`**: Cleans raw text files before tokenization.
-*   **`lunaris_data_analyzer`**: Inspects and validates `.memmap` dataset files.
+Helper tools for data analysis, text cleaning, and tokenizer training are available. Each contains its own `README.md` with compilation and usage instructions.
+*   **`bpe_trainer`**: Trains BPE merges from a corpus to help create custom tokenizers. (Located in `bpe_trainer/`)
+*   **`lunaris_text_cleaner`**: Cleans raw text files before tokenization. (Located in `text_cleaner/`)
+*   **`lunaris_data_analyzer`**: Inspects and validates `.memmap` dataset files. (Located in `data_analyzer/`)
 
 ---
 
