@@ -4,64 +4,141 @@ name: GitHub Activity to Discord
 
 on:
   push:
-    branches:
-      - main # Notificar pushes para o branch principal
+    branches: [main]
   issues:
-    types: [opened, edited, closed, reopened, labeled, unlabeled, assigned, unassigned]
+    types: [opened, edited, closed, reopened, labeled, unlabeled, assigned, unassigned, milestoned, demilestoned]
+  pull_request:
+    types: [opened, edited, closed, reopened, labeled, unlabeled, synchronize, ready_for_review, review_requested]
+  # pull_request_review: # Pode ser muito barulhento, mas é uma opção
+  #   types: [submitted, edited, dismissed]
+  release:
+    types: [published, created, edited, released] # Notificar quando um release é publicado/criado
+  watch: # Evento de "star"
+    types: [started]
+  gollum: # Evento de atualização da Wiki
+  workflow_dispatch: # Permite acionamento manual
+
+permissions: # Definir permissões mínimas necessárias
+  contents: read    # Para acessar metadados do repo, commits
+  issues: read      # Para ler dados de issues
+  pull-requests: read # Para ler dados de PRs
 
 jobs:
   notify_discord:
     name: Send Notification to Discord
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code (apenas para acessar informações do evento se necessário)
-        uses: actions/checkout@v4
+      # A action tsickert/discord-webhook é simples, mas para embeds complexos pode ser limitante.
+      # Se precisar de mais controle, considere `Ilshidur/action-discord` ou construir o JSON e usar `fjogeleit/http-request-action`.
+      # Por ora, vamos continuar com tsickert e focar em embeds bem formatados.
 
       # --- Notificação para PUSH no MAIN ---
-      - name: Send Push Notification to Discord
+      - name: Send Push Notification
         if: github.event_name == 'push'
-        uses: tsickert/discord-webhook@v6.0.0 # Uma action popular e simples
+        uses: tsickert/discord-webhook@v6.0.0
         with:
           webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           username: "Lunaris GitHub Bot"
-          avatar-url: "https://github.com/MeryylleA.png"
+          avatar-url: "https://avatars.githubusercontent.com/u/109653559?s=200&v=4" # Seu avatar
           content: |
             🚀 **Push to `main` by @${{ github.actor }}**
-            Commit: `${{ github.event.head_commit.message }}`
-            Compare changes: ${{ github.event.compare }}
+            Total Commits: ${{ github.event.commits_count }}
+            Compare: ${{ github.event.compare }}
+            Head Commit: `${{ github.event.head_commit.message }}`
+            ([${{ github.event.head_commit.id_short }}](${{ github.event.head_commit.url }}))
 
       # --- Notificação para ISSUES ---
-      - name: Send Issue Notification to Discord
+      - name: Send Issue Notification
         if: github.event_name == 'issues'
         uses: tsickert/discord-webhook@v6.0.0
         with:
           webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           username: "Lunaris GitHub Bot"
-          avatar-url: "https://github.com/MeryylleA.png"
+          avatar-url: "https://avatars.githubusercontent.com/u/109653559?s=200&v=4"
           embeds: |
             [
               {
                 "title": "🐛 Issue ${{ github.event.action }}: #${{ github.event.issue.number }} - ${{ github.event.issue.title }}",
                 "url": "${{ github.event.issue.html_url }}",
-                "description": "${{ github.event.issue.body || 'No description provided.' }}".slice(0, 1000) + ( "${{ github.event.issue.body }}".length > 1000 ? "..." : ""),
-                "color": "${{ github.event.action == 'opened' && 5814783 || github.event.action == 'closed' && 15158332 || github.event.action == 'reopened' && 5814783 || 3447003 }}", # Verde para opened/reopened, Vermelho para closed, Azul para outros
-                "author": {
-                  "name": "${{ github.event.issue.user.login }}",
-                  "url": "${{ github.event.issue.user.html_url }}",
-                  "icon_url": "${{ github.event.issue.user.avatar_url }}"
-                },
+                "description": "**By @${{ github.event.issue.user.login }}**\n${{ github.event.issue.body || 'No description provided.' }}".slice(0, 1900) + ( "${{ github.event.issue.body }}".length > 1900 ? "\n..." : ""),
+                "color": "${{ (github.event.action == 'opened' || github.event.action == 'reopened') && 3066993 || (github.event.action == 'closed') && 15158332 || 3447003 }}",
                 "fields": [
-                  {
-                    "name": "Status",
-                    "value": "${{ github.event.issue.state }} (Action: ${{ github.event.action }})",
-                    "inline": true
-                  },
-                  {
-                    "name": "Labels",
-                    "value": "${{ join(github.event.issue.labels.*.name, ', ') || 'None' }}",
-                    "inline": true
-                  }
+                  { "name": "Status", "value": "${{ github.event.issue.state }}", "inline": true },
+                  { "name": "Labels", "value": "${{ join(github.event.issue.labels.*.name, ', ') || 'None' }}", "inline": true }
+                  ${{ github.event.assignee && format(',{"name": "Assignee", "value": "@%s", "inline": true}', github.event.assignee.login) || '' }}
                 ],
                 "timestamp": "${{ github.event.issue.updated_at }}"
+              }
+            ]
+
+      # --- Notificação para PULL REQUESTS ---
+      - name: Send Pull Request Notification
+        if: github.event_name == 'pull_request'
+        uses: tsickert/discord-webhook@v6.0.0
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          username: "Lunaris GitHub Bot"
+          avatar-url: "https://avatars.githubusercontent.com/u/109653559?s=200&v=4"
+          embeds: |
+            [
+              {
+                "title": "🔄 PR ${{ github.event.action }}: #${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}",
+                "url": "${{ github.event.pull_request.html_url }}",
+                "description": "From branch `${{ github.event.pull_request.head.ref }}` into `${{ github.event.pull_request.base.ref }}` by @${{ github.event.pull_request.user.login }}\n${{ github.event.pull_request.body || 'No description provided.' }}".slice(0, 1900) + ( "${{ github.event.pull_request.body }}".length > 1900 ? "\n..." : ""),
+                "color": "${{ (github.event.action == 'opened' || github.event.action == 'reopened' || github.event.action == 'ready_for_review') && 3066993 || (github.event.pull_request.merged == true && github.event.action == 'closed') && 8311585 || (github.event.pull_request.merged == false && github.event.action == 'closed') && 15158332 || 3447003 }}",
+                "fields": [
+                  { "name": "Status", "value": "${{ github.event.pull_request.merged && 'Merged ✨' || github.event.pull_request.draft && 'Draft 📝' || github.event.pull_request.state }}", "inline": true },
+                  { "name": "Commits", "value": "${{ github.event.pull_request.commits }}", "inline": true },
+                  { "name": "Changes", "value": "+${{ github.event.pull_request.additions }} / -${{ github.event.pull_request.deletions }} in ${{ github.event.pull_request.changed_files }} files", "inline": false }
+                ],
+                "timestamp": "${{ github.event.pull_request.updated_at }}"
+              }
+            ]
+
+      # --- Notificação para RELEASES ---
+      - name: Send Release Notification
+        if: github.event_name == 'release' && (github.event.action == 'published' || github.event.action == 'released')
+        uses: tsickert/discord-webhook@v6.0.0
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          username: "Lunaris GitHub Bot"
+          avatar-url: "https://avatars.githubusercontent.com/u/109653559?s=200&v=4"
+          embeds: |
+            [
+              {
+                "title": "🎉 New Release Published: ${{ github.event.release.name }} (Tag: ${{ github.event.release.tag_name }})",
+                "url": "${{ github.event.release.html_url }}",
+                "description": "Published by @${{ github.event.release.author.login }}\n${{ github.event.release.body || 'See the release notes for details.' }}".slice(0, 1900) + ( "${{ github.event.release.body }}".length > 1900 ? "\n..." : ""),
+                "color": 16705372, # Gold/Orange
+                "timestamp": "${{ github.event.release.published_at }}"
+              }
+            ]
+
+      # --- Notificação para ESTRELAS (Watch Started) ---
+      - name: Send Star Notification
+        if: github.event_name == 'watch' && github.event.action == 'started'
+        uses: tsickert/discord-webhook@v6.0.0
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          username: "Lunaris GitHub Bot"
+          avatar-url: "https://avatars.githubusercontent.com/u/109653559?s=200&v=4"
+          content: "⭐ **@${{ github.sender.login }} just starred Lunaris Codex!** Total stars: ${{ github.event.repository.stargazers_count }} ✨ Thank you! 🙏"
+
+      # --- Notificação para Atualizações da WIKI (Gollum) ---
+      - name: Send Wiki Update Notification
+        if: github.event_name == 'gollum' # Evento para alterações na Wiki
+        uses: tsickert/discord-webhook@v6.0.0
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          username: "Lunaris GitHub Bot"
+          avatar-url: "https://avatars.githubusercontent.com/u/109653559?s=200&v=4"
+          embeds: |
+            [
+              {
+                "title": "📚 Wiki Page Updated by @${{ github.sender.login }}",
+                "description": "${{join(github.event.pages.*.action, ', ')}} page(s): ${{join(github.event.pages.*.page_name, ', ') }}\nSee changes: ${{ github.event.repository.html_url }}/wiki/_compare/${{ github.event.pages[0].sha }}",
+                "url": "${{ github.event.repository.html_url }}/wiki",
+                "color": 7506394, # Light Blue
+                "timestamp": "${{ github.context.timestamp }}"
               }
             ]
