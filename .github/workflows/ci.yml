@@ -57,7 +57,7 @@ jobs:
 
       - name: Cache Python dependencies
         id: cache-python-deps
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
@@ -93,7 +93,7 @@ jobs:
       - name: Cache C++ build for Text Cleaner
         id: cache-text-cleaner
         # ... (sem mudanças)
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ./text_cleaner/lunaris_text_cleaner_ci_executable 
           key: ${{ runner.os }}-text-cleaner-ci-${{ hashFiles('Makefile', 'text_cleaner/lunaris_text_cleaner.cpp') }}
@@ -179,7 +179,7 @@ jobs:
       - name: Cache C++ build for Data Analyzer
         id: cache-data-analyzer
         # ... (sem mudanças)
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ./data_analyzer/lda_ci_executable 
           key: ${{ runner.os }}-data-analyzer-ci-${{ hashFiles('Makefile', 'data_analyzer/lunaris_data_analyzer.cpp') }}
