@@ -1,6 +1,5 @@
 [![Lunaris Codex CI](https://github.com/MeryylleA/lunariscodex/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MeryylleA/lunariscodex/actions/workflows/ci.yml)
 
-#test
 
 # Lunaris Codex
 
