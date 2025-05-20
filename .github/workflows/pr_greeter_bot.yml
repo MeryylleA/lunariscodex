@@ -1,10 +1,11 @@
+# .github/workflows/pr_greeter_bot.yml
 name: Lunaris PR Greeter Bot (GitHub Models)
 
 on:
   pull_request_target:
     types: [opened]
 
-permissions: # Grant write permission for pull requests to the GITHUB_TOKEN
+permissions:
   pull-requests: write
 
 jobs:
@@ -14,7 +15,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4 # Script is now local
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -31,37 +32,36 @@ jobs:
             }
           }' > package.json
           npm install
-        working-directory: . # Ensure this is the root if script is in .github/scripts
+        working-directory: .
 
       - name: Generate Greeting Comment Text
-        id: generate_comment_step # Give an ID to this step
+        id: generate_comment_step
         env:
           GITHUB_PAT_FOR_MODELS: ${{ secrets.GH_MODELS_PAT }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
-          # REPO_FULL_NAME is available as github.repository in later steps
         run: |
-          # The Node.js script will now output the comment text to STDOUT
-          # which we will capture using ::set-output:: (old) or $GITHUB_OUTPUT (new)
-          COMMENT_TEXT=$(node ./.github/scripts/generate_greeting.js)
-          # Check if COMMENT_TEXT is empty or indicates an error from the script
-          if [ -z "$COMMENT_TEXT" ] || [[ "$COMMENT_TEXT" == *"Failed to generate"* ]] || [[ "$COMMENT_TEXT" == *"Error:"* ]]; then
-            echo "Error generating comment or comment is empty. Using fallback."
-            # Prepare a fallback comment if the script fails or returns empty
-            FALLBACK_COMMENT="Thanks for your contribution, @${PR_AUTHOR}! We'll review your PR titled \"${PR_TITLE}\" soon. ✨\n\n---\n*Lunaris Codex Assistant (fallback message).*"
-            echo "comment_body=${FALLBACK_COMMENT}" >> $GITHUB_OUTPUT
-          else
-            echo "comment_body=${COMMENT_TEXT}" >> $GITHUB_OUTPUT
-          fi
+          # Run the Node.js script and capture its entire stdout
+          # The Node.js script is designed to print the final comment (or an error/fallback) to stdout
+          GENERATED_TEXT=$(node ./.github/scripts/generate_greeting.js)
+          echo "Raw output from script: $GENERATED_TEXT" # For debugging
+          
+          # Ensure the output is properly escaped for multiline GitHub action output
+          # Replace newlines with %0A, and other special chars if necessary for ::set-output
+          # For $GITHUB_OUTPUT, multiline is handled by <<EOF syntax
+          
+          echo "comment_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$GENERATED_TEXT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Post Greeting Comment to PR
-        if: steps.generate_comment_step.outputs.comment_body != '' # Only run if comment_body is not empty
+        if: steps.generate_comment_step.outputs.comment_body != '' 
         uses: peter-evans/create-or-update-comment@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }} # Uses the GITHUB_TOKEN with permissions granted by the workflow
+          token: ${{ secrets.GITHUB_TOKEN }} 
           repository: ${{ github.repository }}
           issue-number: ${{ github.event.pull_request.number }}
-          comment-identifier: pr-greeter-bot-greeting # Unique identifier for this comment type
-          edit-mode: replace # Replaces previous comment with this identifier if it exists
+          comment-identifier: pr-greeter-bot-greeting 
+          edit-mode: replace 
           body: ${{ steps.generate_comment_step.outputs.comment_body }}
