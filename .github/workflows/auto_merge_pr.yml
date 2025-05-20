@@ -1,9 +1,11 @@
-# .github/workflows/auto_merge_pr.yml
-name: Auto Merge PR
+name: Lunaris PR Greeter Bot (GitHub Models)
 
 on:
-  pull_request_target: 
-    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  pull-requests: write
 
 jobs:
   enable-auto-merge:
