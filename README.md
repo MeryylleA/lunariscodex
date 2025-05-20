@@ -24,16 +24,16 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
     *   **ALiBi (Attention with Linear Biases):** Integrated for superior long-context handling.
     *   **Optional FlashAttention:** Support for the `flash-attn` library for significant speedups on compatible NVIDIA GPUs.
     *   Robust PyTorch-native manual attention fallback ensuring correct ALiBi and padding mask handling.
-*   **Versatile Data Preprocessing (`prepare_data.py` v0.2.1):**
+*   **Versatile Data Preprocessing (`prepare_data.py` v0.2.2):** <!-- Updated version -->
     *   Comprehensive CLI for full control over data sourcing, tokenization, and processing.
     *   Processes Hugging Face Hub datasets (e.g., [Lunaris-Data](https://huggingface.co/datasets/meryyllebr543/lunaris-data)) with custom column mapping and formatting.
     *   Supports local text files (line-by-line, chunking, glob patterns).
-    *   Flexible tokenizer loading with automatic `pad_token_id` management and detailed logging.
+    *   Flexible tokenizer loading with automatic `pad_token_id` management and **enhanced, detailed logging** of tokenizer properties. <!-- Added detail -->
     *   Saves to efficient memory-mapped NumPy files (`.memmap`).
     *   Features like `--overwrite_output` and explicit tokenizer/output path requirements.
 *   **Comprehensive Training Pipeline (`train.py`):**
     *   Extensive CLI configurability for all training aspects.
-    *   Supports training from scratch and resuming from checkpoints.
+    *   Supports training from scratch and resuming from checkpoints, with **improved logging for checkpoint state restoration**. <!-- Added detail -->
     *   AdamW optimizer, gradient clipping, LR schedulers.
     *   Automatic Mixed Precision (AMP) support (`fp16` or `bf16`) for CUDA.
     *   Robust checkpointing (model, optimizer, scheduler, config, args) with "best model" saving.
@@ -48,12 +48,14 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
     *   **`lunaris_data_analyzer` (v0.2.0):** Inspects `.memmap` datasets, now with configurable `--pad_id`.
     *   **`lunaris_text_cleaner` (v0.3.5):** Cleans raw text, with improved multi-stage HTML cleaning.
 *   **Scalable and Tested:**
-    *   Full E2E pipeline (data prep → train → inference) demonstrated with a ~3M parameter toy model on CPU.
-*   **Continuous Integration (CI):**
+    *   Full E2E pipeline (data prep → train → inference) demonstrated with a ~3M parameter toy model on CPU, and additional overfitting/fine-tuning tests. <!-- Added detail -->
+*   **Continuous Integration (CI) & Automation:**
     *   A comprehensive GitHub Actions workflow (`ci.yml`) tests:
         *   Core Python pipeline (`prepare_data.py`, `train.py`, `inference.py` smoke test).
-        *   Compilation and basic functionality of C++ utilities (`bpe_trainer`, `lunaris_text_cleaner`, `lunaris_data_analyzer`).
+        *   Compilation and basic functionality of C++ utilities.
         *   `model.py` unit tests using `pytest`, with coverage reports sent to Codecov.io.
+    *   Automated Pull Request management for the primary developer, including auto-merge on CI success. <!-- Added detail -->
+    *   Dependabot integration for automated dependency updates (security and version bumps). <!-- Added if Dependabot is active -->
 ---
 
 ## Architecture Overview
@@ -168,7 +170,7 @@ Helper tools for data analysis, text cleaning, and tokenizer training are availa
 For in-depth information, tutorials, and advanced guides, please visit the **[Lunaris Codex Project Wiki](https://github.com/MeryylleA/lunariscodex/wiki)**.  
 Key pages include:
 *   **[Home](https://github.com/MeryylleA/lunariscodex/wiki/Home)** (Start here for an overview of the Wiki content)
-*   **[Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines)** (Guidance on data scale, hardware, and achieving good results)
+*   **[Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines)**
 *   [Data Preparation Pipeline](https://github.com/MeryylleA/lunariscodex/wiki/Data-Preparation-Pipeline) (`prepare_data.py`)
 *   [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) (`train.py`)
 *   [Utility: BPE Trainer](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-BPE-Trainer) **(New!)**
@@ -176,19 +178,22 @@ Key pages include:
 *   [Utility: Lunaris Data Analyzer](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Data-Analyzer)
 *   [Tutorial: Training Your First Model](https://github.com/MeryylleA/lunariscodex/wiki/Training-Your-First-Model)
 *   [Tutorial: Using the Lunaris-Data Dataset](https://github.com/MeryylleA/lunariscodex/wiki/Using-the-Lunaris-Data-Dataset)
+<!-- Optional: Add link to inference guide if created -->
+<!-- * [Guide: Generating Text with Inference.py](https://github.com/MeryylleA/lunariscodex/wiki/Guide:-Generating-Text-with-Inference.py) -->
+
 
 ---
 
 ## Roadmap
 
 Our current focus and future plans include:
-*   Further enhancing `inference.py` with features like interactive mode, batch generation, improved visual output, and advanced sampling techniques.
-*   Expanding documentation: advanced tutorials, API reference, and more details for the **[Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines)**.
 *   **Integrating custom BPE tokenizers (trained with `bpe_trainer`) into the `prepare_data.py` script.**
+*   **Enhancing `lunaris_data_analyzer` with token decoding capabilities.**
+*   Increasing unit test coverage for `model.py`.
+*   Developing a dedicated evaluation script (`evaluate.py`).
+*   Further enhancing `inference.py` (interactive mode, batch generation, etc.).
+*   Expanding documentation: advanced tutorials, API reference.
 *   Providing pre-tokenized versions of common public datasets or robust scripts to process them efficiently.
-*   Example configurations for training on large-scale datasets like SlimPajama or The Stack.
-*   Benchmarking performance and generation quality across different model sizes and hardware.
-*   Exploring further optimizations such as gradient checkpointing and quantization techniques.
 *   (Ambitious) Releasing small to medium pretrained base models if resources permit.
 
 ---
