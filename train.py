@@ -12,6 +12,7 @@ import os
 import argparse
 import logging
 import random
+import sys # Added for sys.exit
 from tqdm import tqdm
 
 # Project-specific imports
@@ -41,7 +42,10 @@ class MemmapCodeDataset(Dataset):
             # Load the memory-mapped file
             self.data = np.memmap(memmap_file, dtype=dtype, mode='r', shape=(num_sequences, max_length))
         except FileNotFoundError:
-            logger.error(f"Memmap file not found: {memmap_file}"); raise
+            logger.error(f"Memmap file not found: {memmap_file}"); 
+            # Suggestion: Add a more user-friendly exit or raise a custom exception
+            # For now, re-raising the original exception.
+            raise
         except ValueError as e:
             logger.error(f"Error loading memmap (check shape/dtype?): {memmap_file} - {e}"); raise
         
@@ -93,7 +97,7 @@ def compute_metrics(logits, targets, attention_mask, pad_token_id_for_loss_ignor
 def save_checkpoint(model, optimizer, epoch, step, current_loss, args, is_best=False, scheduler=None):
     """Saves training checkpoint."""
     os.makedirs(args.checkpoint_dir, exist_ok=True)
-    base_filename_no_ext = f"lunaris_codex_epoch-{epoch+1}_step-{step}"
+    base_filename_no_ext = f"lunaris_codex_epoch-{epoch+1}_step-{step}" # epoch is 0-indexed, so +1 for display
     checkpoint_path = os.path.join(args.checkpoint_dir, f"{base_filename_no_ext}.pt")
 
     model_to_save = model._orig_mod if hasattr(model, '_orig_mod') and isinstance(model._orig_mod, nn.Module) else model
@@ -101,7 +105,7 @@ def save_checkpoint(model, optimizer, epoch, step, current_loss, args, is_best=F
     checkpoint_content = {
         "model_state_dict": model_to_save.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
-        "epoch": epoch, 
+        "epoch": epoch, # Save 0-indexed epoch
         "step": step,
         "loss": current_loss, 
         "config": model_to_save.config.__dict__, # Save model config
@@ -115,58 +119,92 @@ def save_checkpoint(model, optimizer, epoch, step, current_loss, args, is_best=F
     if is_best:
         best_path = os.path.join(args.checkpoint_dir, "best_model.pt")
         torch.save(checkpoint_content, best_path)
-        logger.info(f"Best checkpoint saved to {best_path}")
+        logger.info(f"Best checkpoint (val_loss: {current_loss:.4f}) saved to {best_path}")
 
 def load_checkpoint(model, optimizer, args, device, scheduler=None):
-    """Loads training checkpoint."""
+    """Loads training checkpoint with enhanced logging."""
     start_epoch, start_step, min_val_loss = 0, 0, float('inf')
     
     checkpoint_to_load = args.resume_from_checkpoint
-    if not checkpoint_to_load and args.checkpoint_dir: # Try to load best_model if no specific checkpoint is given
+    # Try to load best_model if no specific checkpoint is given but a checkpoint_dir exists
+    if not checkpoint_to_load and args.checkpoint_dir: 
         potential_best_checkpoint = os.path.join(args.checkpoint_dir, "best_model.pt")
         if os.path.isfile(potential_best_checkpoint):
-            logger.info(f"No checkpoint specified, attempting to load 'best_model.pt'")
+            logger.info(f"No specific checkpoint provided via --resume_from_checkpoint. Found 'best_model.pt' in {args.checkpoint_dir}. Attempting to load it.")
             checkpoint_to_load = potential_best_checkpoint
+        else:
+            logger.info(f"No specific checkpoint provided and 'best_model.pt' not found in {args.checkpoint_dir}. Looking for other .pt files.")
+            # Fallback: try to find the latest epoch/step checkpoint if no best_model.pt
+            pt_files = [f for f in os.listdir(args.checkpoint_dir) if f.endswith('.pt') and f != "best_model.pt"]
+            if pt_files:
+                # Simple sort by name, assuming name contains epoch/step in a sortable way
+                # More robust would be to parse epoch/step from filename
+                latest_checkpoint = sorted(pt_files, reverse=True)[0] 
+                checkpoint_to_load = os.path.join(args.checkpoint_dir, latest_checkpoint)
+                logger.info(f"Attempting to load latest available checkpoint: {checkpoint_to_load}")
+
 
     if checkpoint_to_load and os.path.isfile(checkpoint_to_load):
         logger.info(f"Loading checkpoint from: {checkpoint_to_load}")
         try:
             checkpoint = torch.load(checkpoint_to_load, map_location=device)
-            model_state_dict = checkpoint["model_state_dict"]
             
-            # Handle state_dict loading for compiled vs. non-compiled models
-            current_model_is_compiled = hasattr(model, '_orig_mod') and isinstance(model._orig_mod, nn.Module)
-            checkpoint_was_from_compiled = any(k.startswith("_orig_mod.") for k in model_state_dict.keys())
+            # --- Model State ---
+            model_state_dict = checkpoint.get("model_state_dict")
+            if model_state_dict:
+                current_model_is_compiled = hasattr(model, '_orig_mod') and isinstance(model._orig_mod, nn.Module)
+                checkpoint_was_from_compiled = any(k.startswith("_orig_mod.") for k in model_state_dict.keys())
+                target_model_for_load_state_dict = model._orig_mod if current_model_is_compiled else model
+                
+                if not current_model_is_compiled and checkpoint_was_from_compiled:
+                    logger.info("Checkpoint is from a compiled model, but current model is not. Stripping '_orig_mod.' prefix.")
+                    model_state_dict = {k.replace('_orig_mod.', ''): v for k, v in model_state_dict.items()}
+                
+                missing_keys, unexpected_keys = target_model_for_load_state_dict.load_state_dict(model_state_dict, strict=False)
+                if missing_keys: logger.warning(f"Missing keys when loading model_state_dict: {missing_keys}")
+                if unexpected_keys: logger.warning(f"Unexpected keys when loading model_state_dict: {unexpected_keys}")
+                logger.info("Model state loaded successfully.")
+            else:
+                logger.warning("Model state_dict not found in checkpoint.")
 
-            target_model_for_load_state_dict = model
-            if current_model_is_compiled:
-                target_model_for_load_state_dict = model._orig_mod
-            
-            if not current_model_is_compiled and checkpoint_was_from_compiled:
-                # Loading compiled checkpoint into non-compiled model: strip _orig_mod.
-                model_state_dict = {k.replace('_orig_mod.', ''): v for k, v in model_state_dict.items()}
-            
-            # It's generally safer to load into the non-compiled version (_orig_mod) if the current model is compiled,
-            # or directly if the current model is not compiled.
-            missing_keys, unexpected_keys = target_model_for_load_state_dict.load_state_dict(model_state_dict, strict=False)
+            # --- Optimizer State ---
+            if optimizer and "optimizer_state_dict" in checkpoint:
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                logger.info("Optimizer state loaded successfully.")
+            elif optimizer:
+                logger.warning("Optimizer state_dict not found in checkpoint. Optimizer will start fresh.")
 
-            if missing_keys: logger.warning(f"Missing keys in model_state_dict: {missing_keys}")
-            if unexpected_keys: logger.warning(f"Unexpected keys in model_state_dict: {unexpected_keys}")
-
-            if optimizer and "optimizer_state_dict" in checkpoint: optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            # --- Scheduler State ---
             if scheduler and "scheduler_state_dict" in checkpoint and checkpoint["scheduler_state_dict"] is not None:
                 scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+                logger.info("Scheduler state loaded successfully.")
+            elif scheduler:
+                logger.warning("Scheduler state_dict not found in checkpoint. Scheduler will start fresh (if applicable).")
             
-            start_epoch = checkpoint.get("epoch", 0) 
+            # --- Training Progress ---
+            start_epoch = checkpoint.get("epoch", -1) + 1 # Epochs are 0-indexed in checkpoint, resume from next
             start_step = checkpoint.get("step", 0)
-            min_val_loss = checkpoint.get("loss", float('inf'))
-            # args_from_checkpoint = checkpoint.get("args") # For reference or validation
-            logger.info(f"Checkpoint loaded. Resuming from epoch {start_epoch + 1}, global step {start_step}.")
+            min_val_loss = checkpoint.get("loss", float('inf')) # This is often val_loss or last train_loss if no val
+            
+            logger.info(f"Checkpoint loaded. Resuming training from epoch {start_epoch}, global step {start_step}.")
+            logger.info(f"  Previous loss (often val_loss) from checkpoint: {min_val_loss:.4f}")
+
+            # --- Config and Args (for reference) ---
+            if "config" in checkpoint:
+                logger.info(f"  Model config from checkpoint: {checkpoint['config']}")
+            if "args" in checkpoint:
+                logger.info(f"  Training args from checkpoint: {checkpoint['args']}")
+
         except Exception as e:
-            logger.error(f"Failed to load checkpoint: {e}. Starting from scratch.", exc_info=True)
+            logger.error(f"Failed to load checkpoint: {e}. Starting training from scratch.", exc_info=True)
             start_epoch, start_step, min_val_loss = 0, 0, float('inf')
     else:
-        logger.info("No checkpoint found or specified. Starting training from scratch.")
+        if args.resume_from_checkpoint: # If a specific path was given but not found
+             logger.warning(f"Specified checkpoint {args.resume_from_checkpoint} not found. Starting training from scratch.")
+        else:
+             logger.info("No checkpoint found or specified. Starting training from scratch.")
+        start_epoch, start_step, min_val_loss = 0, 0, float('inf') # Ensure these are reset
+        
     return start_epoch, start_step, min_val_loss
 
 def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args):
@@ -176,28 +214,32 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args):
     optimizer_params = []
     if args.use_lora:
         for name, param in model.named_parameters():
-            if 'lora_' in name and param.requires_grad: # Ensure LoRA params were set to require_grad
+            if 'lora_' in name and param.requires_grad: 
                 optimizer_params.append(param)
-    else: # Full fine-tuning/training
+    else: 
         for param in model.parameters():
             if param.requires_grad:
                 optimizer_params.append(param)
     
     if not optimizer_params:
-        logger.error("No trainable parameters found for the optimizer! Check LoRA setup or model's requires_grad flags."); return model
+        logger.error("No trainable parameters found for the optimizer! Check LoRA setup or model's requires_grad flags."); 
+        # Consider sys.exit(1) or raising an error
+        return model 
     logger.info(f"Optimizing {len(optimizer_params)} parameter tensors.")
 
     optimizer = AdamW(optimizer_params, lr=args.learning_rate, weight_decay=args.weight_decay, 
-                      fused=(args.adam_fused and device.type == 'cuda')) # Fused only for CUDA
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=args.lr_scheduler_patience)
+                      fused=(args.adam_fused and device.type == 'cuda')) 
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=args.lr_scheduler_patience, verbose=True) # Added verbose=True for scheduler
     scaler = amp.GradScaler(enabled=(args.mixed_precision_dtype is not None and device.type == 'cuda'))
     
-    start_epoch, global_step, best_val_loss = load_checkpoint(model, optimizer, args, device, scheduler)
+    # Load checkpoint *after* optimizer and scheduler are initialized
+    start_epoch_from_load, global_step, best_val_loss = load_checkpoint(model, optimizer, args, device, scheduler)
+    # Note: load_checkpoint returns epoch to *start* from, so if checkpoint was epoch 0, it returns 1.
+    # The loop range should be `range(start_epoch_from_load, args.num_epochs)`
 
     if args.use_torch_compile and hasattr(torch, 'compile'):
         logger.info(f"Compiling model with torch.compile (mode: {args.torch_compile_mode})...")
         try:
-            # Compile the underlying model if the current `model` object is a compiled wrapper
             model_to_compile = model._orig_mod if hasattr(model, '_orig_mod') and isinstance(model._orig_mod, nn.Module) else model
             compiled_part = torch.compile(model_to_compile, mode=args.torch_compile_mode)
             if hasattr(model, '_orig_mod') and isinstance(model._orig_mod, nn.Module):
@@ -208,18 +250,20 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args):
         except Exception as e:
             logger.error(f"Failed to compile model: {e}. Continuing without compilation.", exc_info=True)
 
-    for epoch in range(start_epoch, args.num_epochs):
+    for epoch in range(start_epoch_from_load, args.num_epochs): # Use start_epoch_from_load
         model.train()
         epoch_loss, epoch_perplexity, epoch_top1_acc = 0.0, 0.0, 0.0
         
-        train_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.num_epochs} [Training]")
+        train_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.num_epochs} [Training]") # Display epoch as 1-indexed
         
         for batch_idx, batch in enumerate(train_iterator):
             input_ids = batch["input_ids"].to(device, non_blocking=args.pin_memory)
             attention_mask = batch["attention_mask"].to(device, non_blocking=args.pin_memory)
 
-            if global_step == 0 and batch_idx == 0: # Log only for the very first batch of the entire training run
-                logger.info(f"First batch - Epoch {epoch+1}, Shape: {input_ids.shape}, Pad ID (for attention mask): {tokenizer.pad_token_id}")
+            # Log first batch info only if it's truly the first batch of the entire training run
+            # (i.e., not resuming from a step > 0 in the first epoch)
+            if epoch == start_epoch_from_load and batch_idx == 0 and global_step <= (len(train_dataloader) if start_epoch_from_load == 0 else 0) : 
+                logger.info(f"First batch processing - Epoch {epoch+1}, Shape: {input_ids.shape}, Pad ID (for attention mask): {tokenizer.pad_token_id}")
 
             optimizer.zero_grad(set_to_none=True)
             
@@ -232,7 +276,9 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args):
                 loss, perplexity, top1_acc = compute_metrics(logits, input_ids, attention_mask)
 
             if torch.isnan(loss) or torch.isinf(loss):
-                logger.error(f"Invalid loss (NaN or Inf) at epoch {epoch+1}, batch {batch_idx}, global_step {global_step}! Stopping training."); return model
+                logger.error(f"Invalid loss (NaN or Inf) at epoch {epoch+1}, batch {batch_idx+1}, global_step {global_step}! Stopping training."); 
+                # Consider saving a 'bad_checkpoint' or similar before exiting
+                return model 
             
             scaler.scale(loss).backward()
             if args.grad_clip_norm > 0:
@@ -244,7 +290,6 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args):
             global_step += 1
             epoch_loss += loss.item()
             current_ppl_item = perplexity.item()
-            # Accumulate perplexity carefully to avoid issues with inf
             epoch_perplexity += current_ppl_item if not (torch.isinf(perplexity) or torch.isnan(perplexity)) else (epoch_perplexity / (batch_idx + 1) if batch_idx > 0 else 0.0)
             epoch_top1_acc += top1_acc.item()
 
@@ -258,12 +303,12 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args):
                  logger.info(f"E{epoch+1} S{global_step} B{batch_idx+1}/{len(train_dataloader)} | Loss: {loss.item():.4f}, PPL: {current_ppl_item:.2f}, Acc: {top1_acc.item():.3f}, LR: {optimizer.param_groups[0]['lr']:.2e}")
 
             if args.save_strategy == "steps" and global_step % args.save_steps == 0:
-                val_loss_for_save = loss.item() # Default to current train loss if no validation
+                val_loss_for_save = loss.item() 
                 is_best_for_save = False
                 if args.validation_interval_steps > 0 and global_step % args.validation_interval_steps == 0 and val_dataloader:
-                    logger.info(f"Running validation at step {global_step}...")
+                    logger.info(f"Running mid-epoch validation at step {global_step}...")
                     val_loss_for_save, _, _ = evaluate_model(model, val_dataloader, tokenizer, args, device)
-                    scheduler.step(val_loss_for_save)
+                    scheduler.step(val_loss_for_save) # Step scheduler on validation loss
                     if val_loss_for_save < best_val_loss:
                         best_val_loss = val_loss_for_save; is_best_for_save = True
                         logger.info(f"New best validation loss: {best_val_loss:.4f} (at step {global_step})")
@@ -275,10 +320,10 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args):
         logger.info(f"End of Epoch {epoch+1}/{args.num_epochs} - Training | Avg Loss: {avg_epoch_loss:.4f}, Avg PPL: {avg_epoch_perplexity:.2f}, Avg Acc: {avg_epoch_top1_acc:.3f}")
 
         if val_dataloader:
-            logger.info(f"Running validation for Epoch {epoch+1}...")
+            logger.info(f"Running end-of-epoch validation for Epoch {epoch+1}...")
             val_loss, val_perplexity, val_accuracy = evaluate_model(model, val_dataloader, tokenizer, args, device)
             logger.info(f"End of Epoch {epoch+1} - Validation | Loss: {val_loss:.4f}, PPL: {val_perplexity:.2f}, Acc: {val_accuracy:.3f}")
-            scheduler.step(val_loss)
+            scheduler.step(val_loss) # Step scheduler on validation loss
             
             is_current_epoch_best = val_loss < best_val_loss
             if is_current_epoch_best:
@@ -287,8 +332,8 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args):
             
             if args.save_strategy == "epoch":
                  save_checkpoint(model, optimizer, epoch, global_step, val_loss, args, is_best=is_current_epoch_best, scheduler=scheduler)
-        elif args.save_strategy == "epoch": # Save even if no validation, using training loss
-             save_checkpoint(model, optimizer, epoch, global_step, avg_epoch_loss, args, is_best=False, scheduler=scheduler)
+        elif args.save_strategy == "epoch": 
+             save_checkpoint(model, optimizer, epoch, global_step, avg_epoch_loss, args, is_best=False, scheduler=scheduler) # Save based on train loss if no val
     
     logger.info("Training completed!")
     return model
@@ -296,10 +341,12 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args):
 def evaluate_model(model, dataloader, tokenizer, args, device):
     model.eval()
     total_loss, total_perplexity, total_accuracy = 0.0, 0.0, 0.0
+    num_batches_processed = 0 # To handle empty dataloader
     
     eval_iterator = tqdm(dataloader, desc="[Validation/Test]")
     with torch.no_grad():
         for batch in eval_iterator:
+            num_batches_processed += 1
             input_ids = batch["input_ids"].to(device, non_blocking=args.pin_memory)
             attention_mask = batch["attention_mask"].to(device, non_blocking=args.pin_memory)
             
@@ -313,19 +360,19 @@ def evaluate_model(model, dataloader, tokenizer, args, device):
             
             total_loss += loss.item()
             current_ppl_item = perplexity.item()
-            total_perplexity += current_ppl_item if not (torch.isinf(perplexity) or torch.isnan(perplexity)) else (total_perplexity / (len(eval_iterator) or 1))
+            # More robust perplexity accumulation
+            total_perplexity += current_ppl_item if not (torch.isinf(perplexity) or torch.isnan(perplexity)) else (total_perplexity / num_batches_processed if num_batches_processed > 1 else 0.0)
             total_accuracy += accuracy.item()
 
             eval_iterator.set_postfix({"val_loss": f"{loss.item():.4f}", 
                                        "val_ppl": f"{current_ppl_item:.2f}" if not (torch.isinf(perplexity) or torch.isnan(perplexity)) else "inf/nan",
                                        "val_acc": f"{accuracy.item():.3f}"})
 
-    num_batches = len(dataloader)
-    avg_loss = total_loss / num_batches if num_batches > 0 else 0
-    avg_perplexity = total_perplexity / num_batches if num_batches > 0 else float('inf')
-    avg_accuracy = total_accuracy / num_batches if num_batches > 0 else 0
+    avg_loss = total_loss / num_batches_processed if num_batches_processed > 0 else 0
+    avg_perplexity = total_perplexity / num_batches_processed if num_batches_processed > 0 else float('inf')
+    avg_accuracy = total_accuracy / num_batches_processed if num_batches_processed > 0 else 0
     
-    model.train() # Set model back to training mode
+    model.train() 
     return avg_loss, avg_perplexity, avg_accuracy
 
 if __name__ == "__main__":
@@ -381,53 +428,56 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    # Apply global PyTorch settings
     if args.allow_tf32 and args.device == "cuda" and torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
         torch.backends.cuda.matmul.allow_tf32 = True; logger.info("TF32 for CUDA matmuls enabled.")
     if args.cudnn_benchmark and args.device == "cuda" and torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True; logger.info("torch.backends.cudnn.benchmark enabled.")
     set_seed(args.seed)
 
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name_or_path, trust_remote_code=True) # Added trust_remote_code for safety with some tokenizers
     if tokenizer.pad_token_id is None:
         pad_token_to_add = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else \
                            tokenizer.bos_token_id if tokenizer.bos_token_id is not None else None
         if pad_token_to_add is not None:
             tokenizer.pad_token_id = pad_token_to_add
-        else: # Fallback: add a new pad token
-            tokenizer.add_special_tokens({'pad_token': '<|PAD|>'}) # Use a distinct pad token string
-            logger.warning(f"Tokenizer had no pad/eos/bos. Added new pad_token='<|PAD|>' (ID: {tokenizer.pad_token_id}). Vocab size is now: {len(tokenizer)}. Ensure model's vocab_size is updated if not inferred.")
+            logger.info(f"Tokenizer pad_token_id was None. Set to: {tokenizer.pad_token} (ID: {tokenizer.pad_token_id})")
+        else: 
+            original_vocab_size = len(tokenizer)
+            tokenizer.add_special_tokens({'pad_token': '<|PAD|>'})
+            logger.warning(f"Tokenizer had no pad/eos/bos. Added new pad_token='<|PAD|>' (ID: {tokenizer.pad_token_id}). Vocab size changed from {original_vocab_size} to {len(tokenizer)}. Ensure model's vocab_size is updated if not inferred.")
 
-    # Setup datasets
     train_dataset = MemmapCodeDataset(args.memmap_file_train, args.num_sequences_train, args.dataset_max_length, tokenizer.pad_token_id, args.dataset_dtype)
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, 
                                   num_workers=args.num_workers, pin_memory=(args.pin_memory and args.device == "cuda"))
     
     val_dataloader = None
     if args.memmap_file_val and args.num_sequences_val > 0:
-        val_dataset = MemmapCodeDataset(args.memmap_file_val, args.num_sequences_val, args.dataset_max_length, tokenizer.pad_token_id, args.dataset_dtype)
-        val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, 
-                                    num_workers=args.num_workers, pin_memory=(args.pin_memory and args.device == "cuda"))
-        logger.info(f"Validation dataset loaded from {args.memmap_file_val} ({args.num_sequences_val} sequences).")
+        try:
+            val_dataset = MemmapCodeDataset(args.memmap_file_val, args.num_sequences_val, args.dataset_max_length, tokenizer.pad_token_id, args.dataset_dtype)
+            val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, 
+                                        num_workers=args.num_workers, pin_memory=(args.pin_memory and args.device == "cuda"))
+            logger.info(f"Validation dataset loaded from {args.memmap_file_val} ({args.num_sequences_val} sequences).")
+        except FileNotFoundError:
+            logger.warning(f"Validation data file {args.memmap_file_val} not found. Proceeding without validation data.")
+            val_dataloader = None # Explicitly set to None
+        except Exception as e:
+            logger.error(f"Error loading validation data from {args.memmap_file_val}: {e}. Proceeding without validation.", exc_info=True)
+            val_dataloader = None # Explicitly set to None
     else:
         logger.info("No validation dataset provided or num_sequences_val is 0.")
 
-    # Setup model config
-    # Vocab size should be len(tokenizer) after any potential additions like a new pad_token
     effective_vocab_size = args.vocab_size if args.vocab_size is not None else len(tokenizer)
     if args.vocab_size is not None and args.vocab_size != len(tokenizer):
-        logger.warning(f"Provided --vocab_size ({args.vocab_size}) differs from tokenizer's actual vocab size ({len(tokenizer)}). Using --vocab_size.")
+        logger.warning(f"Provided --vocab_size ({args.vocab_size}) differs from tokenizer's actual vocab size ({len(tokenizer)}). Using the provided --vocab_size.")
     
     model_config = LunarisCodexConfig(
         vocab_size=effective_vocab_size, d_model=args.d_model, n_layers=args.n_layers, n_heads=args.n_heads,
         max_seq_len=args.model_max_seq_len, dropout=args.dropout, activation=args.activation,
         lora_rank=args.lora_rank, 
-        use_flash_attention_if_available=(args.device == 'cuda') # Only attempt flash if on CUDA
+        use_flash_attention_if_available=(args.device == 'cuda') 
     )
     model = LunarisMind(model_config)
     
-    # Setup LoRA trainable parameters
     args.use_lora = model_config.lora_rank > 0 and model_config.lora_rank is not None
     if args.use_lora:
         logger.info(f"Setting up for LoRA training (rank={model_config.lora_rank}).")
@@ -446,11 +496,10 @@ if __name__ == "__main__":
         all_params_val = 0
         trainable_params_val = 0
         for param in model.parameters(): 
-            param.requires_grad = True # Ensure all params are trainable if not LoRA
+            param.requires_grad = True 
             all_params_val += param.numel()
             if param.requires_grad:
                 trainable_params_val += param.numel()
         logger.info(f"Total model parameters: {all_params_val:,}. Trainable parameters: {trainable_params_val:,} ({trainable_params_val/all_params_val*100:.2f}%)")
 
-    # Start training
     trained_model = train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args)
