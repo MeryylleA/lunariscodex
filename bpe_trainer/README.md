@@ -1,117 +1,152 @@
-# Lunaris BPE Tokenizer Trainer (bpe_trainer)
+<!-- README for bpe_trainer - Reviewed and Updated by Lunaris Codex Assistant (Gemini 2.5 Pro) - May 20, 2025 -->
+<!-- Based on PR #36, the following sections were updated: -->
+<!-- - Purpose and Functionality: To reflect upcoming tokenization. -->
+<!-- - Command-Line Arguments: To include --action and tokenize options. -->
+<!-- - Output Files: To describe the new vocabulary_map format. -->
+<!-- - Version bumped to 0.1.1. -->
 
-**Version: 0.1.0**
+# Lunaris BPE Processor (bpe_trainer)
 
-The `Lunaris BPE Tokenizer Trainer` is a command-line utility written in C++ designed to learn Byte Pair Encoding (BPE) merges from a given text corpus. It generates a vocabulary and a list of merge operations that can be used to build a BPE-based subword tokenizer.
+**Version: 0.1.1**
 
-This tool is a core component for users of the [Lunaris Codex](https://github.com/MeryylleA/lunariscodex) project who wish to create custom tokenizers tailored to their specific datasets, especially for tasks like code generation or specialized language modeling.
+The `Lunaris BPE Processor` (executable: `bpe_trainer`) is a command-line utility written in C++ designed to learn Byte Pair Encoding (BPE) merges from a given text corpus and, in upcoming versions, to tokenize text using a trained BPE model. It generates a vocabulary map (token to ID) and an ordered list of merge operations.
 
-## Purpose
+This tool is a core component for users of the [Lunaris Codex](https://github.com/MeryylleA/lunariscodex) project who wish to create and eventually use custom tokenizers tailored to their specific datasets, especially for tasks like code generation or specialized language modeling.
 
-The primary goal of this tool is **not** to be a full-fledged tokenizer itself (i.e., it doesn't take arbitrary text and output token IDs directly in this version). Instead, it focuses on the **training phase** of BPE:
-1.  Analyzing a raw text corpus.
-2.  Starting with a base vocabulary (either individual bytes or pre-segmented words).
-3.  Iteratively finding the most frequent pair of adjacent tokens and merging them into a new, single token.
-4.  Repeating this process until a target vocabulary size is reached or no more frequent pairs can be merged.
-5.  Saving the learned **vocabulary** and the **ordered list of merge operations**.
+## Purpose and Functionality
 
-These outputs (vocabulary and merges) are the essential components required by a BPE *encoder/decoder* to tokenize new text and detokenize token IDs back into text.
+The tool currently focuses on the **training phase** of BPE and is being actively extended to include **tokenization capabilities**.
+
+**Current Functionality (`--action train`):**
+1.  Analyzes a raw text corpus.
+2.  Initializes a vocabulary based on the chosen mode (byte-level or word-level).
+3.  Iteratively identifies the most frequent pair of adjacent tokens and merges them.
+4.  Saves the learned **vocabulary map** (mapping token strings to integer IDs) and the **ordered list of merge operations** in a primary JSON file, alongside human-readable plain text versions.
+
+**Upcoming Functionality (`--action tokenize` - In Development):**
+*   Load a pre-trained BPE model (its vocabulary map and merge rules).
+*   Tokenize new input text into a sequence of corresponding token IDs.
+*   (Future) Detokenize a sequence of token IDs back into human-readable text.
+
+The outputs from the training phase are the essential components required by any BPE encoder/decoder.
 
 ## Features
 
 *   **Corpus-Driven BPE Training:** Learns merge rules directly from your provided text data.
-*   **Two Pre-tokenization Modes:**
-    *   **Byte-Level (`--mode byte`):** Starts with individual bytes as initial tokens. Bytes are represented as their ASCII characters if printable, or as safe hexadecimal escape sequences (e.g., `\x0A` for newline, `\xC3` for non-ASCII bytes). This mode is generally recommended for building robust subword tokenizers for diverse text and code.
-    *   **Word-Level (`--mode word`):** Starts with space-separated "words" as initial tokens. BPE then learns to merge parts of these words or entire words. Simpler for understanding BPE concepts on smaller, well-behaved text.
-*   **Configurable Target Vocabulary Size:** You can specify the desired final size of your vocabulary via `--vocab-size`.
-*   **Detailed Statistics:** Reports on raw corpus characters, initial token count, initial/final vocabulary sizes, total merges, and training time.
-*   **Verbose Mode:** Optional `--verbose` flag for detailed logging of each merge operation and progress.
-*   **Structured Output:**
-    *   Saves a `bpe_model_lunaris.json` file containing the final vocabulary, the learned merge operations, training mode, and key statistics.
-    *   Also saves `vocabulary_lunaris.txt` and `merges_lunaris.txt` in human-readable plain text formats.
-*   **Efficient C++ Implementation:** Designed for performance when processing text corpora.
+*   **Two Pre-tokenization Modes for Training (`--mode byte` or `--mode word`):**
+    *   **Byte-Level:** (Recommended for general use) Starts with individual bytes as initial tokens. Non-printable/non-ASCII bytes are represented as safe hexadecimal escape sequences (e.g., `\x0A` for newline). This mode is robust for diverse text and code.
+    *   **Word-Level:** Starts with space-separated "words" as initial tokens. BPE then learns to merge parts of these words.
+*   **Configurable Target Vocabulary Size (`--vocab-size`):** Allows specification of the desired final vocabulary size during training.
+*   **Structured Model Output (`*_bpe_model_lunaris.json`):**
+    *   `vocabulary_map`: A JSON object mapping token strings to their integer IDs (e.g., `{"hello": 256, " world": 257}`).
+    *   `merges`: An ordered list of the learned merge pairs, stored with their original (non-escaped) token strings.
+    *   `bpe_config`: Contains training configuration details, such as the `mode` used (e.g., "byte").
+    *   `stats`: Key statistics from the training process.
+*   **Plain Text Outputs:**
+    *   `*_vocabulary_lunaris.txt`: A plain text file listing each token from the final vocabulary (escaped for display) on a new line. The line number (0-indexed) corresponds to the token's ID.
+    *   `*_merges_lunaris.txt`: A plain text file listing the ordered merge operations (tokens escaped for display), one pair per line.
+*   **Detailed Statistics:** Reports on raw corpus characters, token counts, vocabulary sizes, total merges, and training time.
+*   **Verbose Mode (`--verbose`):** Optional flag for detailed logging of each merge operation and progress.
+*   **Model Loading Capability:** The processor can now load a trained BPE model from its JSON file in preparation for tokenization.
+*   **Efficient C++ Implementation:** Designed for performance.
 
 ## Prerequisites
 
 *   A C++17 compatible compiler (e.g., `g++`, `clang++`).
-*   Standard C++ libraries.
-*   [nlohmann/json.hpp](https://github.com/nlohmann/json): A header-only JSON library for C++. You'll need to place `json.hpp` (usually found in `single_include/nlohmann/`) in a location your compiler can find it (e.g., in the same directory as `bpe_trainer.cpp`, or in an include path).
-*   `std::filesystem` support (C++17).
+*   Standard C++ libraries, including support for `std::filesystem`.
+*   [nlohmann/json.hpp](https://github.com/nlohmann/json): A header-only JSON library for C++. This needs to be accessible by your compiler (e.g., placed in the `bpe_trainer/` directory, or in a system include path).
 
 ## Compilation
 
-Navigate to the `bpe_trainer/` directory (or wherever `bpe_trainer.cpp` and `json.hpp` are located) and compile using a C++17 compiler:
-
+The primary and recommended way to compile the `bpe_trainer` executable is by using the main `Makefile` located in the root directory of the Lunaris Codex project:
 ```bash
-# Ensure nlohmann/json.hpp is accessible (e.g., in the current dir or via -I)
-# If json.hpp is in the same directory:
-g++ bpe_trainer.cpp -o bpe_trainer -std=c++17 -O2 -I.
-
-# If json.hpp is in ./include/nlohmann/json.hpp:
-# g++ bpe_trainer.cpp -o bpe_trainer -std=c++17 -O2 -I./include
+# From the root directory of the Lunaris Codex project
+make bpe_trainer
 ```
-*The `-O2` flag enables optimizations. `-I.` tells the compiler to look for includes in the current directory.*
+This command will typically place the compiled executable at `bpe_trainer/bpe_trainer`. You can also use `make all` to build all C++ utilities.
 
-On some older Linux systems, you might need to link the filesystem library if you encounter linker errors related to `std::filesystem`:
+For manual compilation (if, for instance, `nlohmann/json.hpp` is in the current `bpe_trainer/` directory):
 ```bash
+cd bpe_trainer/
 g++ bpe_trainer.cpp -o bpe_trainer -std=c++17 -O2 -I. -lstdc++fs
 ```
+*   The `-O2` flag enables optimizations.
+*   `-I.` tells the compiler to look for include files in the current directory.
+*   `-lstdc++fs` links the filesystem library, which might be necessary on some Linux systems.
 
 ## Usage
 
-Run the compiled `bpe_trainer` executable from your terminal.
+Run the compiled `bpe_trainer` executable from your terminal, typically from the root of the Lunaris Codex project.
 
 ```bash
-./bpe_trainer --corpus <path_to_corpus.txt> [options...]
+./bpe_trainer/bpe_trainer --action <train|tokenize> [options...]
 ```
 
 ### Command-Line Arguments:
 
-*   `--corpus FILE`: **(Required)** Path to the input corpus text file. Each line in the file is processed.
-*   `--output DIR`: (Optional) Output directory for model files (vocabulary, merges, JSON).
-    *   Default: `./bpe_lunaris_model`
-*   `--vocab-size N`: (Optional) Target vocabulary size. The training will perform merges until this size is approached or no more beneficial merges can befound.
-    *   Default: `32000`
-*   `--mode LEVEL`: (Optional) Initial tokenization mode.
-    *   `byte`: Initial tokens are individual bytes. Non-printable/non-ASCII bytes are represented as hex escapes (e.g., `\x0A`).
-    *   `word`: Initial tokens are space-separated words from the corpus.
-    *   Default: `byte`
-*   `--verbose`: (Optional) Enable verbose logging output during training, showing each merge and progress.
+*   `--action ACTION`: **(Required)** Specifies the operation:
+    *   `train`: Trains a new BPE model.
+    *   `tokenize`: (Development in progress) Loads a trained model to tokenize text.
+*   `--corpus FILE_PATH`: **(Required for `--action train`)** Path to the input corpus text file.
+*   `--output PATH_OR_PREFIX`: (Optional for `--action train`) Path for saving output model files.
+    *   If `PATH_OR_PREFIX` ends with a directory separator (`/` or `\`), it's treated as a directory. Files (e.g., `bpe_model_lunaris.json`) are saved inside with default names.
+    *   If `PATH_OR_PREFIX` does not end with a separator (e.g., `./my_models/custom_bpe`), it's treated as a prefix. Files will be named like `custom_bpe_bpe_model_lunaris.json`, etc., in the `./my_models/` directory.
+    *   Default: Creates a directory `./bpe_lunaris_model/` and saves files with default names.
+*   `--vocab-size N`: (Optional for `--action train`) Target vocabulary size. Default: `32000`.
+*   `--mode LEVEL`: (Optional for `--action train`) Initial tokenization mode: `byte` or `word`. Default: `byte`.
+*   `--model_path PATH_OR_PREFIX`: **(Required for `--action tokenize`)** Path to the trained BPE model directory or file prefix (location of the `*_bpe_model_lunaris.json` file).
+*   `--input_text "TEXT"`: (Optional for `--action tokenize`) Text string to tokenize directly.
+*   `--input_file FILE_PATH`: (Optional for `--action tokenize`) Path to a file whose content will be tokenized. Use either `--input_text` or `--input_file` for tokenization.
+*   `--verbose`: (Optional) Enable verbose logging output.
 *   `-h`, `--help`: (Optional) Display the help message and exit.
 
-### Example: Training a Byte-Level BPE Model
+### Example 1: Training a Byte-Level BPE Model
 
 ```bash
-# Create a sample corpus file (e.g., corpus.txt)
-# echo "hello world" > corpus.txt
-# echo "hello new world" >> corpus.txt
+# Ensure corpus.txt exists
+# Example: echo "hello world of BPE tokenizers" > corpus.txt
+#          echo "another line for the BPE trainer" >> corpus.txt
 
-./bpe_trainer \
+./bpe_trainer/bpe_trainer \
+    --action train \
     --corpus ./corpus.txt \
-    --output ./my_custom_bpe_model \
+    --output ./my_custom_bpe_model/ \
     --vocab-size 500 \
     --mode byte \
     --verbose
 ```
-This will:
-1.  Read `corpus.txt`.
-2.  Initialize vocabulary with unique bytes (represented safely) found in `corpus.txt` and standard ASCII.
-3.  Perform BPE merges until the vocabulary size approaches 500 or no more merges are beneficial.
-4.  Save `bpe_model_lunaris.json`, `vocabulary_lunaris.txt`, and `merges_lunaris.txt` into the `./my_custom_bpe_model/` directory.
+This command will:
+1. Read `corpus.txt`.
+2. Perform BPE training in byte-level mode.
+3. Aim for a vocabulary size up to 500.
+4. Save `bpe_model_lunaris.json`, `vocabulary_lunaris.txt`, and `merges_lunaris.txt` into the `./my_custom_bpe_model/` directory.
 
-## Output Files
+### Example 2: Loading a Trained Model (Tokenization - Placeholder Output)
 
-The training process generates the following files in the specified output directory:
+```bash
+./bpe_trainer/bpe_trainer \
+    --action tokenize \
+    --model_path ./my_custom_bpe_model/ \
+    --input_text "This is a test sentence to tokenize." \
+    --verbose
+```
+This will load the BPE model from `./my_custom_bpe_model/` and (currently) print an informational message. Future versions will output token IDs.
 
-1.  **`bpe_model_lunaris.json`**: A JSON file containing:
-    *   `vocabulary`: A sorted list of all tokens in the final vocabulary.
-    *   `merges`: An ordered list of pairs that were merged during training. Each sub-array is `["token1", "token2"]`. The order is important for correctly applying BPE during tokenization.
-    *   `bpe_config`: Contains training configuration like `{"mode": "byte"}`.
-    *   `stats`: Key statistics from the training process (corpus size, vocab sizes, number of merges, training time).
-2.  **`vocabulary_lunaris.txt`**: A plain text file listing each token in the final vocabulary on a new line, sorted alphabetically. Non-printable/non-ASCII bytes are represented as hex escapes.
-3.  **`merges_lunaris.txt`**: A plain text file listing the ordered merge operations, one pair per line, formatted as `token1 token2`.
+## Output Files (from Training - `--action train`)
+
+The training process generates the following files in the location specified by `--output`:
+
+1.  **`[prefix_]bpe_model_lunaris.json`**: A JSON file containing:
+    *   `vocabulary_map`: A JSON object mapping token strings to their integer IDs (e.g., `{"hello": 273, " world": 451}`).
+    *   `merges`: An ordered list of pairs (original, non-escaped token strings) that were merged during training. The order is crucial for tokenization.
+    *   `bpe_config`: Contains training configuration, like `{"mode": "byte"}`.
+    *   `stats`: Key statistics from the training process.
+2.  **`[prefix_]vocabulary_lunaris.txt`**: A plain text file listing each token from the final vocabulary (escaped for display) on a new line. The line number (0-indexed) corresponds to the token's ID. This file is useful for human inspection.
+3.  **`[prefix_]merges_lunaris.txt`**: A plain text file listing the ordered merge operations (tokens escaped for display), one pair per line (e.g., `h e`). This file is useful for human inspection.
 
 ## How BPE Works (Briefly)
+<!-- This section can remain largely the same as your current README -->
+<!-- ... (brief explanation of BPE) ... -->
 
 1.  **Initialization:** The corpus is split into an initial sequence of tokens.
     *   In **byte-level** mode, each byte becomes a token.
@@ -126,16 +161,13 @@ The training process generates the following files in the specified output direc
 3.  **Termination:** The process stops when the desired vocabulary size is reached or when no more pairs can be merged (e.g., all remaining pairs occur only once).
 
 ## Roadmap & Future Possibilities
-
-This `bpe_trainer` is the foundational step. Future development could include:
-
-*   **BPE Tokenizer/Encoder:** A companion tool or library function that takes the `vocabulary.txt` and `merges.txt` (or `bpe_model_lunaris.json`) generated by this trainer and uses them to tokenize new, unseen text into a sequence of token strings or IDs.
-*   **BPE Decoder:** A function to convert a sequence of token strings/IDs back into human-readable text.
-*   **Integration with Lunaris Codex `prepare_data.py`:** Allow `prepare_data.py` to use a custom BPE model trained by this tool.
-*   **Support for Special Tokens:** Handling pre-defined special tokens (like `[UNK]`, `[CLS]`, `[SEP]`, `[PAD]`, `[BOS]`, `[EOS]`) during training or allowing them to be added to the vocabulary.
-*   **Pre-tokenization Rules:** More sophisticated pre-tokenization rules for `word-level` mode (e.g., handling punctuation better than simple space splitting, regex-based splitting).
-*   **Performance Optimizations:** For extremely large corpora, explore more advanced data structures or parallelization for pair counting and merging.
-*   **Caching of Pair Counts:** To speed up re-training or a_paramount_ (paramount) iterative training.
+<!-- Reflecting current status -->
+*   **Implement BPE Tokenizer/Encoder (`--action tokenize`):** (Actively In Progress) Fully implement the tokenization logic within this tool to convert new text into a sequence of token IDs using a loaded, trained model.
+*   **Implement BPE Decoder (`--action detokenize`):** Add functionality to convert a sequence of token IDs back into human-readable text.
+*   **Integration with Lunaris Codex `prepare_data.py`:** Allow `prepare_data.py` to natively use custom BPE models trained and applied by this tool.
+*   **Support for Special Tokens:** Define strategies for handling pre-defined special tokens (like `[UNK]`, `[PAD]`, `[BOS]`, `[EOS]`) during training and tokenization.
+*   **Advanced Pre-tokenization Rules:** For `word-level` mode, explore more sophisticated pre-tokenization (e.g., regex-based splitting, better punctuation handling).
+*   **Performance Optimizations:** For extremely large corpora, investigate further optimizations.
 
 ## Contributing
 Contributions are welcome! If you have ideas for improvements, new features, or find any bugs, please open an issue or a pull request on the [Lunaris Codex GitHub repository](https://github.com/MeryylleA/lunariscodex).
