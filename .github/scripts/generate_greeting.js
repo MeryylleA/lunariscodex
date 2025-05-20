@@ -1,26 +1,30 @@
 // .github/scripts/generate_greeting.js
 import ModelClient, { isUnexpected } from "@azure-rest/ai-inference";
 import { AzureKeyCredential } from "@azure/core-auth";
-// import { execSync } from 'child_process'; // No longer needed
 
 const githubPatForModels = process.env.GITHUB_PAT_FOR_MODELS;
 const endpoint = "https://models.github.ai/inference";
 const modelId = "openai/gpt-4.1-mini";
 
 const prAuthor = process.env.PR_AUTHOR;
-const prNumber = process.env.PR_NUMBER; // Still useful for logging/context
+const prNumber = process.env.PR_NUMBER; 
 const prTitle = process.env.PR_TITLE;
-// const repoFullName = process.env.REPO_FULL_NAME; // No longer needed by this script
-// const ghTokenForComment = process.env.GH_TOKEN_FOR_COMMENT; // No longer needed by this script
 
 async function main() {
+  let finalCommentText = `Error: Default fallback for PR #${prNumber} by @${prAuthor}.`; // Default error message
+
   if (!githubPatForModels) {
     console.error("Error: GITHUB_PAT_FOR_MODELS environment variable is not set.");
-    // Instead of process.exit(1), we'll let the workflow handle fallback
-    console.log("Failed to generate unique greeting: Missing PAT"); 
-    return; // Exit function, workflow will use fallback
+    finalCommentText = `Thanks for your contribution, @${prAuthor}! (Automated greeting failed: Missing API Key for AI model).`;
+    console.log(finalCommentText); // Output for GitHub Actions
+    return;
   }
-  // ... other env var checks can also just return or print an error message to be captured ...
+  if (!prNumber || !prAuthor || !prTitle) {
+    console.error("Error: Missing one or more PR/Repo environment variables for context.");
+    finalCommentText = `Thanks for your contribution! (Automated greeting failed: Missing PR context).`;
+    console.log(finalCommentText); // Output for GitHub Actions
+    return;
+  }
 
   console.log(`Processing PR #${prNumber} ('${prTitle}') by @${prAuthor} for comment generation.`);
 
@@ -38,7 +42,6 @@ async function main() {
   const selectedUserPrompt = greetingPrompts[Math.floor(Math.random() * greetingPrompts.length)];
   
   console.log(`Selected user prompt for ${modelId}: ${selectedUserPrompt}`);
-  let finalCommentText = ""; // Initialize
 
   try {
     const response = await client.path("/chat/completions").post({
@@ -56,30 +59,36 @@ async function main() {
 
     if (isUnexpected(response)) {
       console.error("Error from AI model API:", response.body.error);
-      finalCommentText = `Failed to generate a unique greeting due to API error (PR: ${prTitle} by @${prAuthor}).`;
+      finalCommentText = `Thanks for your contribution, @${prAuthor}! (Automated greeting had an AI API issue for PR "${prTitle}").`;
     } else {
       let commentText = response.body.choices[0]?.message?.content || "";
       commentText = commentText.trim();
-      // Basic cleanup
-      if (commentText.lower().startswith("```text")) { commentText = commentText.substring(7).trim(); }
-      else if (commentText.lower().startswith("text")) { commentText = commentText.substring(4).trim(); }
-      if (commentText.endswith("```")) { commentText = commentText.slice(0, -3).trim(); }
+      
+      // Corrected cleanup using toLowerCase() and startsWith()
+      if (commentText.toLowerCase().startsWith("```text")) { 
+        commentText = commentText.substring(7).trim(); 
+      } else if (commentText.toLowerCase().startsWith("text")) { 
+        commentText = commentText.substring(4).trim(); 
+      }
+      if (commentText.endsWith("```")) { 
+        commentText = commentText.slice(0, -3).trim(); 
+      }
       
       if (commentText) {
         finalCommentText = `${commentText}\n\n---\n*This is an automated greeting from the Lunaris Codex Assistant. 🤖*`;
       } else {
-        finalCommentText = `Failed to generate a unique greeting, but thanks for your PR, @${prAuthor}! (PR: ${prTitle})`;
+        // Fallback if AI returns empty content after cleanup
+        finalCommentText = `Thanks for your great contribution, @${prAuthor}, on PR "${prTitle}"! We'll take a look soon. 👍\n\n---\n*This is an automated greeting from the Lunaris Codex Assistant. 🤖*`;
       }
     }
   } catch (err) {
     console.error("The script encountered an error during AI generation:", err);
-    finalCommentText = `Error during comment generation for PR "${prTitle}" by @${prAuthor}.`;
+    // More specific fallback if there's a general script error
+    finalCommentText = `Welcome, @${prAuthor}! Thanks for opening PR "${prTitle}". We'll review it shortly. (Automated greeting experienced an issue.)\n\n---\n*This is an automated greeting from the Lunaris Codex Assistant. 🤖*`;
   }
 
   // Output the final comment text to STDOUT for the GitHub Action to capture
-  // This is the crucial part for passing it to the next step.
   console.log(finalCommentText); 
 }
 
-main(); // Removed .catch here, workflow will see script success/failure by exit code.
-        // If main throws an unhandled error, the script will exit non-zero.
+main();
