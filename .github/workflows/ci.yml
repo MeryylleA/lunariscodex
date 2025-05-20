@@ -156,34 +156,15 @@ jobs:
           fi
           echo "BPE Trainer ran successfully and created output files."
 
-      - name: Post C++ Job Failure Comment & Cleanup
+      - name: Final C++ Job Cleanup # Renamed: Removed "Post C++ Job Failure Comment"
         if: always() 
         run: |
-          if [[ "${{ job.status }}" == "failure" && "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "::group::Posting C++ Job Failure Comment"
-            read -r -d '' COMMENT_BODY << EOF
-          ---
-          **Lunaris Codex CI Status: FAILED ❌** 
-          Workflow: \`${{ github.workflow }}\`
-          Job: \`${{ job.name || github.job }}\` (C++ Utilities Test)
-          Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
-
-          Some C++ utility checks have failed. Please review the errors.
-          ➡️ [View Action Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-
-          *This is an automated message from your friendly Lunaris Codex CI.*
-          EOF
-            gh issue comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "$COMMENT_BODY" \
-            || echo "Warning: Failed to post C++ failure comment. Check gh CLI availability or GITHUB_TOKEN permissions for commenting."
-            echo "::endgroup::"
-          fi
-          
+          # Removed block for posting failure comment
           echo "Performing C++ job temporary test files cleanup..."
           rm -rf ./temp_text_cleaner_ci_input ./temp_text_cleaner_ci_output expected_output_tc.txt \
                  ./temp_bpe_corpus ./temp_bpe_output
           echo "C++ job temporary test files cleanup complete."
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # env: GITHUB_TOKEN not needed if not commenting
 
   #---------------------------------------------------------------------------
   # JOB 2: Test Python Suite (prepare_data, train, inference, unit tests)
@@ -221,7 +202,7 @@ jobs:
           pytest tests/ -k "test_model" --cov=model --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5 # Updated to v5
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }} 
           files: ./coverage.xml 
@@ -310,32 +291,13 @@ jobs:
             exit 1
           fi
       
-      - name: Post Python Job Failure Comment & Cleanup
+      - name: Final Python Job Cleanup # Renamed: Removed "Post Python Job Failure Comment"
         if: always()
         run: |
-          if [[ "${{ job.status }}" == "failure" && "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "::group::Posting Python Job Failure Comment"
-            read -r -d '' COMMENT_BODY << EOF
-          ---
-          **Lunaris Codex CI Status: FAILED ❌** 
-          Workflow: \`${{ github.workflow }}\`
-          Job: \`${{ job.name || github.job }}\` (Python Suite Test)
-          Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
-
-          Some Python checks or script executions have failed. Please review the errors.
-          ➡️ [View Action Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-
-          *This is an automated message from your friendly Lunaris Codex CI.*
-          EOF
-            gh issue comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "$COMMENT_BODY" \
-            || echo "Warning: Failed to post Python failure comment. Check gh CLI availability or GITHUB_TOKEN permissions for commenting."
-            echo "::endgroup::"
-          fi
-
+          # Removed block for posting failure comment
           echo "Cleaning up Python CI temporary files..."
           rm -rf ./temp_data_ci_train ./temp_data_ci_val \
                  ./processed_data_ci ./checkpoints_ci \
                  ./coverage.xml
           echo "Python CI cleanup process complete."
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # env: GITHUB_TOKEN not needed if not commenting
