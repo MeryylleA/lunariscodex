@@ -1,4 +1,4 @@
-name: Lunaris PR Greeter Bot (GitHub Models)
+name: Auto Merge PR
 
 on:
   pull_request_target:
