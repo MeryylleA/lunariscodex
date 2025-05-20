@@ -11,22 +11,22 @@ const prNumber = process.env.PR_NUMBER;
 const prTitle = process.env.PR_TITLE;
 
 async function main() {
-  let finalCommentText = `Error: Default fallback for PR #${prNumber} by @${prAuthor}.`; // Default error message
+  let finalCommentText = `Error: Default fallback for PR #${prNumber} by @${prAuthor}.`; 
 
   if (!githubPatForModels) {
-    console.error("Error: GITHUB_PAT_FOR_MODELS environment variable is not set.");
+    console.error("Error: GITHUB_PAT_FOR_MODELS environment variable is not set."); // Use console.error
     finalCommentText = `Thanks for your contribution, @${prAuthor}! (Automated greeting failed: Missing API Key for AI model).`;
-    console.log(finalCommentText); // Output for GitHub Actions
+    console.log(finalCommentText); 
     return;
   }
   if (!prNumber || !prAuthor || !prTitle) {
-    console.error("Error: Missing one or more PR/Repo environment variables for context.");
+    console.error("Error: Missing one or more PR/Repo environment variables for context."); // Use console.error
     finalCommentText = `Thanks for your contribution! (Automated greeting failed: Missing PR context).`;
-    console.log(finalCommentText); // Output for GitHub Actions
+    console.log(finalCommentText); 
     return;
   }
 
-  console.log(`Processing PR #${prNumber} ('${prTitle}') by @${prAuthor} for comment generation.`);
+  console.error(`Processing PR #${prNumber} ('${prTitle}') by @${prAuthor} for comment generation.`); // Use console.error
 
   const client = ModelClient(
     endpoint,
@@ -41,7 +41,7 @@ async function main() {
   const selectedSystemPrompt = "You are a friendly assistant for the Lunaris Codex open-source project, tasked with welcoming new pull requests.";
   const selectedUserPrompt = greetingPrompts[Math.floor(Math.random() * greetingPrompts.length)];
   
-  console.log(`Selected user prompt for ${modelId}: ${selectedUserPrompt}`);
+  console.error(`Selected user prompt for ${modelId}: ${selectedUserPrompt}`); // Use console.error
 
   try {
     const response = await client.path("/chat/completions").post({
@@ -58,13 +58,12 @@ async function main() {
     });
 
     if (isUnexpected(response)) {
-      console.error("Error from AI model API:", response.body.error);
-      finalCommentText = `Thanks for your contribution, @${prAuthor}! (Automated greeting had an AI API issue for PR "${prTitle}").`;
+      console.error("Error from AI model API:", response.body.error); // Use console.error
+      finalCommentText = `Thanks for your contribution, @${prAuthor}! (Automated greeting had an AI API issue for PR "${prTitle}").\n\n---\n*This is an automated greeting from the Lunaris Codex Assistant. 🤖*`;
     } else {
       let commentText = response.body.choices[0]?.message?.content || "";
       commentText = commentText.trim();
       
-      // Corrected cleanup using toLowerCase() and startsWith()
       if (commentText.toLowerCase().startsWith("```text")) { 
         commentText = commentText.substring(7).trim(); 
       } else if (commentText.toLowerCase().startsWith("text")) { 
@@ -77,17 +76,15 @@ async function main() {
       if (commentText) {
         finalCommentText = `${commentText}\n\n---\n*This is an automated greeting from the Lunaris Codex Assistant. 🤖*`;
       } else {
-        // Fallback if AI returns empty content after cleanup
         finalCommentText = `Thanks for your great contribution, @${prAuthor}, on PR "${prTitle}"! We'll take a look soon. 👍\n\n---\n*This is an automated greeting from the Lunaris Codex Assistant. 🤖*`;
       }
     }
   } catch (err) {
-    console.error("The script encountered an error during AI generation:", err);
-    // More specific fallback if there's a general script error
+    console.error("The script encountered an error during AI generation:", err); // Use console.error
     finalCommentText = `Welcome, @${prAuthor}! Thanks for opening PR "${prTitle}". We'll review it shortly. (Automated greeting experienced an issue.)\n\n---\n*This is an automated greeting from the Lunaris Codex Assistant. 🤖*`;
   }
 
-  // Output the final comment text to STDOUT for the GitHub Action to capture
+  // This is the ONLY console.log that should print the final comment to STDOUT
   console.log(finalCommentText); 
 }
 
