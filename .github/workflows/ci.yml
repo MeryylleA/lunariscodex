@@ -17,15 +17,11 @@ on:
       - 'requirements.txt'
       - '.github/workflows/ci.yml' 
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review] # Explicit types for PR trigger
-    branches: [ main ] # Only run on PRs targeting main
-    # paths: section removed for pull_request trigger to ensure CI always runs for PRs to main
-  workflow_dispatch: # Allows manual triggering
+    types: [opened, synchronize, reopened, ready_for_review] 
+    branches: [ main ] 
+  workflow_dispatch: 
 
 jobs:
-  #---------------------------------------------------------------------------
-  # JOB 1: Build and Test C++ Utilities
-  #---------------------------------------------------------------------------
   build_and_test_cpp:
     name: Build & Test C++ Utilities
     runs-on: ubuntu-latest
@@ -133,38 +129,41 @@ jobs:
           echo "another line for the bpe test" >> ./temp_bpe_corpus/corpus1.txt
           echo "lunaris codex bpe trainer example" > ./temp_bpe_corpus/corpus2.txt
           cat ./temp_bpe_corpus/corpus1.txt ./temp_bpe_corpus/corpus2.txt > ./temp_bpe_corpus/combined_corpus.txt
-          mkdir -p ./temp_bpe_output
+          mkdir -p ./temp_bpe_output/ci_bpe # Ensure the target directory exists
 
       - name: Run and Test C++ BPE Trainer
         run: |
           BPE_TRAINER_EXEC="./${{ steps.set_exec_paths.outputs.bpe_trainer_exec }}"
           if [ ! -f "$BPE_TRAINER_EXEC" ]; then echo "ERROR: BPE Trainer executable '$BPE_TRAINER_EXEC' not found!"; exit 1; fi
           
+          # Using --action train for clarity, and ensuring output path ends with /
           "$BPE_TRAINER_EXEC" \
+            --action train \
             --corpus ./temp_bpe_corpus/combined_corpus.txt \
             --vocab-size 280 \
-            --output ./temp_bpe_output/ci_bpe \
-            --mode byte || { echo "BPE Trainer execution failed"; exit 1; }
+            --output ./temp_bpe_output/ci_bpe/ \
+            --mode byte --verbose || { echo "BPE Trainer execution failed"; exit 1; } 
+            # Added --verbose to see BPE logs
+            # Ensured --output path ends with a slash to be treated as a directory
             
+          # Check for files inside the ci_bpe directory
           if [ ! -f "./temp_bpe_output/ci_bpe/bpe_model_lunaris.json" ] || \
              [ ! -f "./temp_bpe_output/ci_bpe/merges_lunaris.txt" ] || \
              [ ! -f "./temp_bpe_output/ci_bpe/vocabulary_lunaris.txt" ]; then
             echo "ERROR: BPE Trainer output files (e.g., ./temp_bpe_output/ci_bpe/bpe_model_lunaris.json) not found!"
             echo "Listing contents of ./temp_bpe_output/ :"
-            ls -R ./temp_bpe_output
+            ls -R ./temp_bpe_output # List contents for debugging
             exit 1
           fi
           echo "BPE Trainer ran successfully and created output files."
 
-      - name: Final C++ Job Cleanup # Renamed: Removed "Post C++ Job Failure Comment"
+      - name: Final C++ Job Cleanup 
         if: always() 
         run: |
-          # Removed block for posting failure comment
           echo "Performing C++ job temporary test files cleanup..."
           rm -rf ./temp_text_cleaner_ci_input ./temp_text_cleaner_ci_output expected_output_tc.txt \
                  ./temp_bpe_corpus ./temp_bpe_output
           echo "C++ job temporary test files cleanup complete."
-        # env: GITHUB_TOKEN not needed if not commenting
 
   #---------------------------------------------------------------------------
   # JOB 2: Test Python Suite (prepare_data, train, inference, unit tests)
@@ -291,13 +290,11 @@ jobs:
             exit 1
           fi
       
-      - name: Final Python Job Cleanup # Renamed: Removed "Post Python Job Failure Comment"
+      - name: Final Python Job Cleanup 
         if: always()
         run: |
-          # Removed block for posting failure comment
           echo "Cleaning up Python CI temporary files..."
           rm -rf ./temp_data_ci_train ./temp_data_ci_val \
                  ./processed_data_ci ./checkpoints_ci \
                  ./coverage.xml
           echo "Python CI cleanup process complete."
-        # env: GITHUB_TOKEN not needed if not commenting
