@@ -4,7 +4,7 @@ name: Lunaris Codex CI
 on:
   push:
     branches: [ main ]
-    paths: # Only run if changes occur in these paths
+    paths: # Only run on push to main if these specific code/config files change
       - 'model.py'
       - 'prepare_data.py'
       - 'train.py'
@@ -19,18 +19,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review] # Explicit types for PR trigger
     branches: [ main ] # Only run on PRs targeting main
-    paths: # Same path filtering for PRs
-      - 'model.py'
-      - 'prepare_data.py'
-      - 'train.py'
-      - 'inference.py'
-      - 'text_cleaner/**'
-      - 'data_analyzer/**'
-      - 'bpe_trainer/**' 
-      - 'tests/**'
-      - 'Makefile'
-      - 'requirements.txt'
-      - '.github/workflows/ci.yml'
+    # paths: section removed for pull_request trigger to ensure CI always runs for PRs to main
   workflow_dispatch: # Allows manual triggering
 
 jobs:
@@ -232,7 +221,7 @@ jobs:
           pytest tests/ -k "test_model" --cov=model --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v5 # Updated to v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }} 
           files: ./coverage.xml 
