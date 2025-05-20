@@ -4,20 +4,22 @@ on:
   pull_request_target:
     types: [opened]
 
+permissions: # Grant write permission for pull requests to the GITHUB_TOKEN
+  pull-requests: write
+
 jobs:
   greet-contributor:
     runs-on: ubuntu-latest
-    # Optional: Condition to not run for your own PRs or dependabot PRs
     # if: github.event.pull_request.user.login != 'MeryylleA' && github.event.pull_request.user.login != 'dependabot[bot]'
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4 # Needed to run a local script
+        uses: actions/checkout@v4 # Script is now local
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20' # Or your preferred LTS version
+          node-version: '20'
 
       - name: Create package.json and Install Dependencies
         run: |
@@ -29,14 +31,37 @@ jobs:
             }
           }' > package.json
           npm install
-        working-directory: . # Run in the root directory
+        working-directory: . # Ensure this is the root if script is in .github/scripts
 
-      - name: Generate and Post Greeting Comment
+      - name: Generate Greeting Comment Text
+        id: generate_comment_step # Give an ID to this step
         env:
-          GITHUB_PAT_FOR_MODELS: ${{ secrets.GH_MODELS_PAT }} # PAT with models:read
+          GITHUB_PAT_FOR_MODELS: ${{ secrets.GH_MODELS_PAT }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
-          REPO_FULL_NAME: ${{ github.repository }}
-          GH_TOKEN_FOR_COMMENT: ${{ secrets.GITHUB_TOKEN }} # Standard GITHUB_TOKEN for posting comments
-        run: node ./.github/scripts/generate_greeting.js # Path to your Node.js script
+          # REPO_FULL_NAME is available as github.repository in later steps
+        run: |
+          # The Node.js script will now output the comment text to STDOUT
+          # which we will capture using ::set-output:: (old) or $GITHUB_OUTPUT (new)
+          COMMENT_TEXT=$(node ./.github/scripts/generate_greeting.js)
+          # Check if COMMENT_TEXT is empty or indicates an error from the script
+          if [ -z "$COMMENT_TEXT" ] || [[ "$COMMENT_TEXT" == *"Failed to generate"* ]] || [[ "$COMMENT_TEXT" == *"Error:"* ]]; then
+            echo "Error generating comment or comment is empty. Using fallback."
+            # Prepare a fallback comment if the script fails or returns empty
+            FALLBACK_COMMENT="Thanks for your contribution, @${PR_AUTHOR}! We'll review your PR titled \"${PR_TITLE}\" soon. ✨\n\n---\n*Lunaris Codex Assistant (fallback message).*"
+            echo "comment_body=${FALLBACK_COMMENT}" >> $GITHUB_OUTPUT
+          else
+            echo "comment_body=${COMMENT_TEXT}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post Greeting Comment to PR
+        if: steps.generate_comment_step.outputs.comment_body != '' # Only run if comment_body is not empty
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }} # Uses the GITHUB_TOKEN with permissions granted by the workflow
+          repository: ${{ github.repository }}
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-identifier: pr-greeter-bot-greeting # Unique identifier for this comment type
+          edit-mode: replace # Replaces previous comment with this identifier if it exists
+          body: ${{ steps.generate_comment_step.outputs.comment_body }}
