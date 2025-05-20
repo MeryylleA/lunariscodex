@@ -2,7 +2,7 @@
 
 First off, thank you for considering contributing to Lunaris Codex! We're excited to have you join our community. Whether you're fixing a bug, proposing a new feature, improving documentation, or sharing your experiments, your help is invaluable.
 
-This document provides a set of guidelines for contributing to Lunaris Codex, which is hosted on GitHub at [https://github.com/MeryylleA/lunaris-codex](https://github.com/MeryylleA/lunaris-codex). These are mostly guidelines, not strict rules. Use your best judgment, and feel free to propose changes to this document in a pull request.
+This document provides a set of guidelines for contributing to Lunaris Codex, which is hosted on GitHub at [https://github.com/MeryylleA/lunariscodex](https://github.com/MeryylleA/lunariscodex). These are mostly guidelines, not strict rules. Use your best judgment, and feel free to propose changes to this document in a pull request.
 
 ## Table of Contents
 - [Code of Conduct](#code-of-conduct)
@@ -22,7 +22,7 @@ This document provides a set of guidelines for contributing to Lunaris Codex, wh
 
 ## Code of Conduct
 
-This project and everyone participating in it is governed by the [Lunaris Codex Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior. (You'll need to create this `CODE_OF_CONDUCT.md` file - GitHub offers templates for this when you create the file).
+This project and everyone participating in it is governed by the [Lunaris Codex Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior.
 
 ## How Can I Contribute?
 
@@ -60,14 +60,14 @@ When you're ready to contribute code or documentation:
 
 1.  **Fork the Repository:** Create your own copy of the `lunariscodex` repository on GitHub.
 2.  **Create a Branch:** Create a new branch in your fork for your changes (e.g., `git checkout -b feature/my-new-feature` or `fix/bug-description`).
-3.  **Develop & Test:** Make your changes, and ensure you add or update tests as appropriate. Make sure your code lints and follows the styleguides (see below).
+3.  **Develop & Test:** Make your changes, and ensure you add or update tests as appropriate. We encourage following the styleguides (see below), especially for Python.
 4.  **Commit Your Changes:** Write clear, concise commit messages (see [Git Commit Messages](#git-commit-messages)).
-5.  **Push to Your Fork:** `git push origin feature/my-new-feature`.
+5.  **Push to Your Fork:** `git push origin your-branch-name`.
 6.  **Open a Pull Request (PR):**
     *   Go to the Lunaris Codex repository and you should see a prompt to open a PR from your new branch.
-    *   Fill out the PR template with a clear description of your changes, why they are needed, and how they were tested.
+    *   Fill out the PR template (if available) with a clear description of your changes, why they are needed, and how they were tested.
     *   Link to any relevant issues (e.g., "Closes #123").
-    *   Ensure your PR passes any automated CI checks (GitHub Actions).
+    *   Ensure your PR passes all automated CI checks (GitHub Actions).
     *   The project maintainer (@MeryylleA) will review your PR. Be prepared to discuss your changes and make further adjustments if requested.
 
 ## Development Setup
@@ -78,12 +78,14 @@ When you're ready to contribute code or documentation:
     python3 -m venv .venv
     source .venv/bin/activate 
     ```
-3.  Install dependencies, including development dependencies (if you create a `requirements-dev.txt` with linters, testing tools, etc.):
+3.  Install dependencies:
     ```bash
     pip install --upgrade pip
     pip install -r requirements.txt
+    # For development (tests, linters), consider installing:
+    # pip install pytest pytest-cov black flake8
     ```
-4.  For the C++ utility (`utils/data_analyzer/`), you'll need a C++17 compiler (like `g++`). See its specific README for compilation instructions.
+4.  For the C++ utilities (e.g., `text_cleaner`, `data_analyzer`, `bpe_trainer`), you'll need a C++17 compiler (like `g++`). They can be compiled using the main `Makefile` in the root of the project (e.g., `make all` or `make <utility_name>`), or by following instructions in their respective `README.md` files.
 
 ## Styleguides
 
@@ -99,27 +101,27 @@ When you're ready to contribute code or documentation:
 ### Python Styleguide
 
 -   Follow [PEP 8](https://www.python.org/dev/peps/pep-0008/) for Python code.
--   Use a code formatter like [Black](https://github.com/psf/black) to ensure consistent style. You can configure it to run automatically.
--   Use a linter like [Flake8](https://flake8.pycqa.org/en/latest/) to catch errors and style issues.
--   Add type hints to your Python code.
+-   We recommend using a code formatter like [Black](https://github.com/psf/black) to ensure consistent style.
+-   We recommend using a linter like [Flake8](https://flake8.pycqa.org/en/latest/) to catch errors and style issues.
+-   Add type hints to your Python code where it improves clarity and maintainability.
 
 ### C++ Styleguide (for utilities)
 
--   Aim for modern C++ (C++17 is used for `lunaris_data_analyzer`).
--   Follow a consistent style. [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) is a good reference, but a simpler, consistent style is fine.
--   Use comments to explain complex parts.
+-   Aim for modern C++ (C++17 is used for our utilities).
+-   Follow a consistent style. The [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) can be a good reference, but a simpler, internally consistent style is the primary goal.
+-   Use comments to explain complex parts of the code.
 
 ### Documentation Styleguide
 
--   Use Markdown for READMEs and other documentation.
+-   Use Markdown for READMEs and other documentation files.
 -   Write clear and concise English.
--   For Python docstrings, consider following [PEP 257](https://www.python.org/dev/peps/pep-0257/) and a common style like Google's Python Style Guide for docstrings or NumPy/SciPy docstring standard.
+-   For Python docstrings, consider following [PEP 257](https://www.python.org/dev/peps/pep-0257/) and a common style like Google's or NumPy's.
 
 ## Testing
 
--   **Python:** We aim to increase test coverage. If you add new features, please try to add corresponding tests (e.g., using `unittest` or `pytest`). Place tests in a `tests/` directory.
--   **C++ Utilities:** Simple command-line tests or small test scripts can be used.
--   **CI:** Our [GitHub Actions workflow](.github/workflows/ci.yml) runs basic pipeline tests. Ensure your changes pass these tests.
+-   **Python:** We aim to increase test coverage. If you add new features or fix bugs, please add or update corresponding tests (using `pytest`). Place tests in the `tests/` directory.
+-   **C++ Utilities:** Basic command-line execution tests are part of the CI. More extensive tests can be added as needed.
+-   **CI:** Our primary [GitHub Actions workflow](.github/workflows/ci.yml) runs a comprehensive suite of tests, including Python pipeline E2E tests, C++ utility compilation and basic execution, and Python unit tests with coverage reporting. Ensure your changes pass these tests.
 
 ## Community and Discussions
 
