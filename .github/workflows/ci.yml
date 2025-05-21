@@ -4,34 +4,22 @@ name: Lunaris Codex CI
 on:
   push:
     branches: [ main ]
-    paths: # Only run on push to main if these specific code/config files change
+    paths: # For pushes to main, we still want to run if core files change
       - 'model.py'
       - 'prepare_data.py'
       - 'train.py'
       - 'inference.py'
       - 'text_cleaner/**'
       - 'data_analyzer/**'
-      - 'bpe_trainer/**' # Assuming bpe_processor.cpp is still in a dir named bpe_trainer
-      - 'tests/**'
-      - 'Makefile'
-      - 'requirements.txt'
-      - '.github/workflows/ci.yml' 
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review] 
-    branches: [ main ] 
-    paths: # ADDED: Same path filtering for PRs to save resources
-      - 'model.py'
-      - 'prepare_data.py'
-      - 'train.py'
-      - 'inference.py'
-      - 'text_cleaner/**'
-      - 'data_analyzer/**'
-      - 'bpe_trainer/**'
+      - 'bpe_trainer/**' 
       - 'tests/**'
       - 'Makefile'
       - 'requirements.txt'
       - '.github/workflows/ci.yml'
-      - '.github/workflows/auto_merge_pr.yml' # If changes to auto-merge logic
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review] 
+    branches: [ main ] 
+    # REMOVED paths filter here, will be handled per-job for PRs
   workflow_dispatch: 
 
 jobs:
@@ -46,17 +34,50 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required for tj-actions/changed-files to get diff against base
 
-      - name: Install C++ dependencies (nlohmann-json)
+      - name: Get changed files for C++ related paths
+        id: changed_files_cpp
+        uses: tj-actions/changed-files@v44 # Check for latest version
+        with:
+          files: |
+            Makefile
+            text_cleaner/**
+            data_analyzer/**
+            bpe_trainer/**
+            # Also include Python files that might impact C++ integration or overall pipeline
+            model.py 
+            prepare_data.py
+            train.py
+            inference.py
+            requirements.txt 
+            .github/workflows/ci.yml # Changes to this CI file itself
+
+      - name: Decide to run C++ tests
+        id: run_cpp_job_decision
+        run: |
+          if [[ "${{ steps.changed_files_cpp.outputs.any_changed }}" == "true" || \
+                "${{ github.event_name }}" == "push" || \
+                "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install C++ dependencies (if running tests)
+        if: steps.run_cpp_job_decision.outputs.should_run == 'true'
         run: |
           sudo apt-get update -y
           sudo apt-get install -y nlohmann-json3-dev 
 
-      - name: Initial C++ Artifact Cleanup (Best Effort)
+      - name: Initial C++ Artifact Cleanup (if running tests)
+        if: steps.run_cpp_job_decision.outputs.should_run == 'true'
         run: |
           make clean || echo "Pre-run 'make clean' info: No Makefile/artifacts or clean failed, proceeding."
 
       - name: Cache C++ build artifacts (executables)
+        if: steps.run_cpp_job_decision.outputs.should_run == 'true' # Cache only if we build
         id: cache-cpp-executables
         uses: actions/cache@v4
         with:
@@ -68,13 +89,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cpp-exec-
 
-      - name: Build C++ Utilities (if not cached)
-        if: steps.cache-cpp-executables.outputs.cache-hit != 'true'
+      - name: Build C++ Utilities (if running tests and not cached)
+        if: steps.run_cpp_job_decision.outputs.should_run == 'true' && steps.cache-cpp-executables.outputs.cache-hit != 'true'
         run: |
           make all CXXFLAGS_MODE=RELEASE 
           echo "C++ utilities built."
 
-      - name: Set C++ executable paths
+      - name: Set C++ executable paths (if running tests)
+        if: steps.run_cpp_job_decision.outputs.should_run == 'true'
         id: set_exec_paths 
         run: |
           echo "text_cleaner_exec=text_cleaner/lunaris_text_cleaner" >> $GITHUB_OUTPUT
@@ -83,8 +105,11 @@ jobs:
           if [[ "${{ steps.cache-cpp-executables.outputs.cache-hit }}" == "true" ]]; then
             echo "C++ executables were restored from cache."
           fi
-
-      - name: Create dummy text file for Text Cleaner CI
+      
+      # --- C++ Utility Tests (Run only if should_run is true) ---
+      - name: Create dummy text file for Text Cleaner CI (if running tests)
+        if: steps.run_cpp_job_decision.outputs.should_run == 'true'
+        # ... (your existing run command)
         run: |
           mkdir -p ./temp_text_cleaner_ci_input
           cat <<EOF > ./temp_text_cleaner_ci_input/sample_for_cleaner.txt
@@ -101,7 +126,9 @@ jobs:
           EOF
           mkdir -p ./temp_text_cleaner_ci_output
 
-      - name: Run and Test C++ Text Cleaner
+      - name: Run and Test C++ Text Cleaner (if running tests)
+        if: steps.run_cpp_job_decision.outputs.should_run == 'true'
+        # ... (your existing run command)
         run: |
           TEXT_CLEANER_EXEC="./${{ steps.set_exec_paths.outputs.text_cleaner_exec }}"
           if [ ! -f "$TEXT_CLEANER_EXEC" ]; then echo "ERROR: Text Cleaner executable '$TEXT_CLEANER_EXEC' not found!"; exit 1; fi
@@ -134,9 +161,11 @@ jobs:
             echo "ERROR: Text Cleaner output does NOT match expected content. Diff shown above."
             exit 1
           fi
-
-      - name: Create dummy corpus for BpeProcessor CI
-        id: bpe_corpus_setup
+          
+      - name: Create dummy corpus for BpeProcessor CI (if running tests)
+        if: steps.run_cpp_job_decision.outputs.should_run == 'true'
+        id: bpe_corpus_setup # ID needs to be unique or this step needs to be part of the if block
+        # ... (your existing run command)
         run: |
           mkdir -p ./temp_bpe_ci/corpus
           mkdir -p ./temp_bpe_ci/model_output
@@ -145,8 +174,10 @@ jobs:
           echo "hello world again" >> ./temp_bpe_ci/corpus/corpus.txt
           echo "Corpus for BpeProcessor created."
 
-      - name: Test BpeProcessor - Train Action
+      - name: Test BpeProcessor - Train Action (if running tests)
+        if: steps.run_cpp_job_decision.outputs.should_run == 'true'
         id: bpe_train_test
+        # ... (your existing run command)
         run: |
           BPE_EXEC="./${{ steps.set_exec_paths.outputs.bpe_processor_exec }}"
           if [ ! -f "$BPE_EXEC" ]; then echo "ERROR: BpeProcessor executable '$BPE_EXEC' not found!"; exit 1; fi
@@ -168,8 +199,9 @@ jobs:
           fi
           echo "BpeProcessor 'train' action successful and output files found."
 
-      - name: Test BpeProcessor - Tokenize Action
-        if: success() && steps.bpe_train_test.outcome == 'success'
+      - name: Test BpeProcessor - Tokenize Action (if running tests and train passed)
+        if: steps.run_cpp_job_decision.outputs.should_run == 'true' && success() && steps.bpe_train_test.outcome == 'success'
+        # ... (your existing run command)
         run: |
           BPE_EXEC="./${{ steps.set_exec_paths.outputs.bpe_processor_exec }}"
           MODEL_PATH="./temp_bpe_ci/model_output/ci_bpe_model/" 
@@ -195,13 +227,18 @@ jobs:
             exit 1
           fi
           echo "BpeProcessor 'tokenize' action successful. Output (first 50 chars): ${TOKEN_IDS_OUTPUT:0:50}..."
+      
+      - name: Skip C++ Job (no relevant changes)
+        if: steps.run_cpp_job_decision.outputs.should_run == 'false'
+        run: |
+          echo "No C++ or core file changes detected in this PR. Skipping C++ Utilities job."
+          exit 0 # Important to exit with success to satisfy branch protection
 
       - name: Post C++ Job Failure Comment & Cleanup 
-        if: always() 
+        if: always() # This will run even if the job was skipped, but failure comment only posts if job.status is failure
         run: |
-          if [[ "${{ job.status }}" == "failure" && "${{ github.event_name }}" == "pull_request" ]]; then
+          if [[ "${{ job.status }}" == "failure" && "${{ steps.run_cpp_job_decision.outputs.should_run }}" == "true" && "${{ github.event_name }}" == "pull_request" ]]; then # Only post if job was supposed to run and failed
             echo "::group::Posting C++ Job Failure Comment"
-            # Using here document for multiline body, ensure EOF is not indented
             read -r -d '' COMMENT_BODY <<EOF
           ---
           **Lunaris Codex CI Status: FAILED ❌** 
@@ -233,32 +270,68 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Set up Python 3.11
+        with:
+          fetch-depth: 0 # Required for tj-actions/changed-files
+
+      - name: Get changed files for Python related paths
+        id: changed_files_python
+        uses: tj-actions/changed-files@v44
+        with:
+          files: |
+            model.py
+            prepare_data.py
+            train.py
+            inference.py
+            tests/**
+            requirements.txt
+            .github/workflows/ci.yml # Changes to this CI file itself
+
+      - name: Decide to run Python tests
+        id: run_python_job_decision
+        run: |
+          if [[ "${{ steps.changed_files_python.outputs.any_changed }}" == "true" || \
+                "${{ github.event_name }}" == "push" || \
+                "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Setup Python and Install Dependencies (if running tests)
+        if: steps.run_python_job_decision.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Cache Python dependencies
+      - name: Cache Python dependencies (run always, cache can still be useful)
+        id: cache-python-deps # Give it an ID if you need its output
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
-      - name: Install Python dependencies
+      - name: Install Python dependencies (if running tests)
+        if: steps.run_python_job_decision.outputs.should_run == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt 
-      - name: Run Pytest for model.py (Unit Tests)
+
+      # --- Python Tests (Run only if should_run is true) ---
+      - name: Run Pytest for model.py (if running tests)
+        if: steps.run_python_job_decision.outputs.should_run == 'true'
         run: |
           export PYTHONPATH=$PYTHONPATH:$(pwd) 
           pytest tests/ -k "test_model" --cov=model --cov-report=xml --cov-report=term-missing
-      - name: Upload coverage to Codecov
+      - name: Upload coverage to Codecov (if running tests and pytest passed)
+        if: steps.run_python_job_decision.outputs.should_run == 'true' && success() # Check if previous steps (pytest) succeeded
         uses: codecov/codecov-action@v4 
         with:
           token: ${{ secrets.CODECOV_TOKEN }} 
           files: ./coverage.xml 
           flags: model-tests 
-      - name: Create dummy datasets for Python script CI
+      - name: Create dummy datasets for Python script CI (if running tests)
+        if: steps.run_python_job_decision.outputs.should_run == 'true'
+        # ... (your existing run command)
         run: |
           mkdir -p ./temp_data_ci_train
           echo "def train_function_one(): return 'train1'" > ./temp_data_ci_train/train_sample_1.py
@@ -266,9 +339,12 @@ jobs:
           mkdir -p ./temp_data_ci_val
           echo "def validation_function(): return 'validation_data_here'" > ./temp_data_ci_val/val_sample_1.py
           echo "# Another validation line" > ./temp_data_ci_val/val_sample_2.py
-      - name: Run prepare_data.py for CI datasets
+
+      - name: Run prepare_data.py for CI datasets (if running tests)
+        if: steps.run_python_job_decision.outputs.should_run == 'true'
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }} 
+        # ... (your existing run command)
         run: |
           python prepare_data.py \
             --data_source_type text_file_lines \
@@ -283,9 +359,11 @@ jobs:
             --tokenizer_name_or_path gpt2 \
             --output_path ./processed_data_ci/ci_val_data.memmap \
             --max_length 32 --max_examples 2 --overwrite_output
-      - name: Run train.py (toy model with validation)
+      - name: Run train.py (toy model with validation) (if running tests)
+        if: steps.run_python_job_decision.outputs.should_run == 'true'
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }} 
+        # ... (your existing run command)
         run: |
           python train.py \
             --memmap_file_train ./processed_data_ci/ci_train_data.memmap \
@@ -299,8 +377,11 @@ jobs:
             --checkpoint_dir ./checkpoints_ci \
             --log_interval 1 --save_strategy epoch \
             --lora_rank 0 --seed 42
-      - name: Check for checkpoint files
+
+      - name: Check for checkpoint files (if running tests and train passed)
+        if: steps.run_python_job_decision.outputs.should_run == 'true' && success()
         id: check_ckpts
+        # ... (your existing run command)
         run: |
           echo "Listing contents of checkpoint directory: ./checkpoints_ci"
           ls -R ./checkpoints_ci
@@ -315,8 +396,10 @@ jobs:
             exit 1
           fi
           echo "All expected checkpoint files found."
-      - name: Test inference.py with toy model checkpoint
-        if: success() && steps.check_ckpts.outcome == 'success'
+
+      - name: Test inference.py with toy model checkpoint (if running tests and checkpoints exist)
+        if: steps.run_python_job_decision.outputs.should_run == 'true' && success() && steps.check_ckpts.outcome == 'success'
+        # ... (your existing run command)
         run: |
           CHECKPOINT_TO_TEST="./checkpoints_ci/best_model.pt"
           OUTPUT=$(python inference.py \
@@ -334,12 +417,18 @@ jobs:
             echo "Output was: $OUTPUT" 
             exit 1
           fi
+
+      - name: Skip Python Job (no relevant changes)
+        if: steps.run_python_job_decision.outputs.should_run == 'false'
+        run: |
+          echo "No core Python or test file changes detected in this PR. Skipping Python Suite job."
+          exit 0 # Important to exit with success
+      
       - name: Post Python Job Failure Comment & Cleanup 
         if: always()
         run: |
-          if [[ "${{ job.status }}" == "failure" && "${{ github.event_name }}" == "pull_request" ]]; then
+          if [[ "${{ job.status }}" == "failure" && "${{ steps.run_python_job_decision.outputs.should_run }}" == "true" && "${{ github.event_name }}" == "pull_request" ]]; then # Only post if job was supposed to run and failed
             echo "::group::Posting Python Job Failure Comment"
-            # Using here document for multiline body, ensure EOF is not indented
             read -r -d '' COMMENT_BODY <<EOF
           ---
           **Lunaris Codex CI Status: FAILED ❌** 
