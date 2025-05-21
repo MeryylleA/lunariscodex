@@ -39,7 +39,7 @@ jobs:
 
       - name: Get changed files for C++ related paths
         id: changed_files_cpp
-        uses: tj-actions/changed-files@v44 # Check for latest version
+        uses: tj-actions/changed-files@v46 # Check for latest version
         with:
           files: |
             Makefile
@@ -275,7 +275,7 @@ jobs:
 
       - name: Get changed files for Python related paths
         id: changed_files_python
-        uses: tj-actions/changed-files@v44
+        uses: tj-actions/changed-files@v46
         with:
           files: |
             model.py
