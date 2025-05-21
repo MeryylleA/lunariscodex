@@ -72,13 +72,12 @@ public:
         }
         if (!ensureOutputDirectory(actual_output_dir)) return false;
 
-
-        if (!this->loadAndPretokenizeCorpus(corpus_path)) { // CORRECTED
+        if (!this->loadAndPretokenizeCorpus(corpus_path)) {
             consoleErr("Error: Failed to load or pretokenize the corpus.");
             return false;
         }
 
-        this->initializeVocabularyFromPretokenizedCorpus(); // CORRECTED
+        this->initializeVocabularyFromPretokenizedCorpus();
         stats_.initial_vocab_size = training_vocab_.size();
 
         if (verbose_) {
@@ -92,11 +91,11 @@ public:
         if (target_vocab_size_param > stats_.initial_vocab_size + 200000 && verbose_) {
             consoleLog("Warning: Requested vocab_size is very large. Capping effective target to " + std::to_string(actual_target_vocab_size) + " (initial_vocab + 200k merges max).");
         }
-        if (verbose_){
+        if (verbose_) {
             consoleLog("Effective target vocabulary size for merging: " + std::to_string(actual_target_vocab_size));
         }
 
-        if (actual_target_vocab_size <= training_vocab_.size()){
+        if (actual_target_vocab_size <= training_vocab_.size()) {
             if (verbose_) {
                 consoleLog("Target vocabulary size (" + std::to_string(actual_target_vocab_size) +
                 ") is already met or exceeded by initial vocabulary (" + std::to_string(training_vocab_.size()) + "). No merges will be performed.");
@@ -104,13 +103,13 @@ public:
         } else {
             if (verbose_) consoleLog("Starting BPE merge iterations...");
             while (training_vocab_.size() < actual_target_vocab_size) {
-                auto pair_counts = this->countAdjacentPairs(); // CORRECTED
+                auto pair_counts = this->countAdjacentPairs();
                 if (pair_counts.empty()) {
                     if (verbose_) consoleLog("No more pairs to merge. Stopping iterations.");
                     break;
                 }
 
-                auto best_pair_info = this->findMostFrequentPair(pair_counts); // CORRECTED
+                auto best_pair_info = this->findMostFrequentPair(pair_counts);
                 if (best_pair_info.first.first.empty() || best_pair_info.second <= 1) {
                     if (verbose_) consoleLog("No more significantly frequent pairs (frequency > 1) to merge. Stopping iterations.");
                     break;
@@ -144,12 +143,12 @@ public:
                     "' (Frequency: " + std::to_string(best_pair_info.second) + ")");
                 }
 
-                this->applyMergeToCorpus(pair_to_merge.first, pair_to_merge.second, new_token); // CORRECTED
+                this->applyMergeToCorpus(pair_to_merge.first, pair_to_merge.second, new_token);
                 learned_merges_for_saving_.push_back(pair_to_merge);
                 stats_.total_merges++;
                 training_vocab_.insert(new_token);
 
-                if (verbose_ && (stats_.total_merges % 100 == 0 || training_vocab_.size() % std::max((size_t)1, actual_target_vocab_size/100) == 0) ) {
+                if (verbose_ && (stats_.total_merges % 100 == 0 || training_vocab_.size() % std::max((size_t)1, actual_target_vocab_size/100) == 0)) {
                     consoleLog("Progress: " + std::to_string(training_vocab_.size()) + "/" + std::to_string(actual_target_vocab_size) +
                     " vocab tokens (" + formatDouble(training_vocab_.size() * 100.0 / actual_target_vocab_size, 2) + "%)");
                 }
@@ -160,7 +159,7 @@ public:
         auto overall_end_time = std::chrono::high_resolution_clock::now();
         stats_.training_time = std::chrono::duration_cast<std::chrono::milliseconds>(overall_end_time - overall_start_time);
 
-        if (verbose_) this->printStats(); // CORRECTED
+        if (verbose_) this->printStats();
         saveTrainingResults(actual_output_dir, file_prefix);
         return true;
                }
@@ -211,7 +210,6 @@ public:
                    if (model_data.contains("bpe_config") && model_data["bpe_config"].contains("mode")) {
                        std::string mode_str = model_data["bpe_config"]["mode"];
                        byte_level_processing_mode_ = (mode_str == "byte");
-                       // CORRECTED string concatenation for log
                        consoleLog(std::string("  Model BPE mode loaded: ") + (byte_level_processing_mode_ ? "byte" : "word"));
                    } else {
                        consoleErr("Error: 'bpe_config.mode' not found in model JSON. Cannot determine tokenization mode.");
@@ -255,6 +253,89 @@ public:
                    return true;
                }
 
+               std::vector<int> tokenize(const std::string& input_text) {
+                   if (!model_loaded_) {
+                       consoleErr("Error: No model loaded. Call load_model() first.");
+                       return std::vector<int>();
+                   }
+
+                   // Pré-processar o texto em tokens iniciais
+                   std::vector<std::string> tokens;
+                   if (byte_level_processing_mode_) {
+                       tokens.reserve(input_text.length());
+                       for (unsigned char c : input_text) {
+                           std::string byte_token;
+                           if (c >= 32 && c <= 126) {
+                               byte_token = std::string(1, c);
+                           } else {
+                               char hex_buf[5];
+                               snprintf(hex_buf, sizeof(hex_buf), "\\x%02X", static_cast<unsigned char>(c));
+                               byte_token = hex_buf;
+                           }
+                           tokens.push_back(byte_token);
+                       }
+                   } else {
+                       std::istringstream iss(input_text);
+                       std::string word;
+                       while (iss >> word) {
+                           if (!word.empty()) {
+                               tokens.push_back(word);
+                           }
+                       }
+                   }
+
+                   // Aplicar merges iterativamente
+                   bool merge_applied;
+                   do {
+                       merge_applied = false;
+                       for (const auto& merge_pair : loaded_merges_for_tokenizing_) {
+                           const std::string& first = merge_pair.first;
+                           const std::string& second = merge_pair.second;
+                           for (size_t i = 0; i < tokens.size() - 1; ++i) {
+                               if (tokens[i] == first && tokens[i + 1] == second) {
+                                   tokens[i] = first + second;
+                                   tokens.erase(tokens.begin() + i + 1);
+                                   merge_applied = true;
+                                   break;
+                               }
+                           }
+                           if (merge_applied) break;
+                       }
+                   } while (merge_applied);
+
+                   // Converter tokens para IDs
+                   std::vector<int> token_ids;
+                   token_ids.reserve(tokens.size());
+                   for (const auto& token : tokens) {
+                       auto it = token_to_id_.find(token);
+                       if (it != token_to_id_.end()) {
+                           token_ids.push_back(it->second);
+                       } else {
+                           consoleLog("Warning: Token '" + escapeTokenForDisplay(token) + "' not found in vocabulary. Using ID 0 (UNK).");
+                           token_ids.push_back(0); // Fallback pra token desconhecido
+                       }
+                   }
+
+                   if (verbose_) {
+                       consoleLog("Tokenized input (first 10 tokens/IDs):");
+                       for (size_t i = 0; i < std::min(token_ids.size(), size_t(10)); ++i) {
+                           consoleLog("  Token " + std::to_string(i) + ": ID " + std::to_string(token_ids[i]) +
+                           " ('" + escapeTokenForDisplay(tokens[i]) + "')");
+                       }
+                       if (token_ids.size() > 10) consoleLog("  ... (total " + std::to_string(token_ids.size()) + " tokens)");
+                   }
+
+                   return token_ids;
+               }
+
+public:
+    void consoleLog(const std::string& message) const {
+        if(verbose_) std::cout << "[INFO] " << message << std::endl;
+    }
+    void consoleErr(const std::string& message) const {
+        std::cerr << "[ERROR] " << message << std::endl;
+    }
+
 private:
     bool verbose_;
     std::vector<std::vector<std::string>> pretokenized_corpus_;
@@ -267,13 +348,6 @@ private:
     std::map<int, std::string> id_to_token_;
     std::vector<std::pair<std::string, std::string>> loaded_merges_for_tokenizing_;
     bool model_loaded_;
-
-    void consoleLog(const std::string& message) const {
-        if(verbose_) std::cout << "[INFO] " << message << std::endl;
-    }
-    void consoleErr(const std::string& message) const {
-        std::cerr << "[ERROR] " << message << std::endl;
-    }
 
     std::string formatDouble(double val, int precision) const {
         std::ostringstream oss;
@@ -453,7 +527,7 @@ private:
             json vocab_map_json = json::object();
             token_to_id_.clear();
             id_to_token_.clear();
-            for (int i = 0; i < static_cast<int>(sorted_vocab_list.size()); ++i) { // Cast to int for loop
+            for (int i = 0; i < static_cast<int>(sorted_vocab_list.size()); ++i) {
                 const std::string& token = sorted_vocab_list[i];
                 vocab_map_json[token] = i;
                 token_to_id_[token] = i;
@@ -495,7 +569,7 @@ private:
             std::string vocab_text_path = (fs::path(actual_output_dir) / vocab_text_filename).string();
             std::ofstream vocab_out_file(vocab_text_path);
             if (vocab_out_file.is_open()) {
-                for (int i = 0; i < static_cast<int>(sorted_vocab_list.size()); ++i) { // Cast to int for loop
+                for (int i = 0; i < static_cast<int>(sorted_vocab_list.size()); ++i) {
                     vocab_out_file << escapeTokenForDisplay(sorted_vocab_list[i]) << "\n";
                 }
                 consoleLog("Vocabulary (TXT) saved to: " + vocab_text_path);
@@ -556,7 +630,7 @@ bool parseCliArguments(int argc, char* argv[], CliArgs& cli_args) {
         else if (arg == "--vocab-size" && i + 1 < argc) { cli_args.vocab_size = std::stoul(argv[++i]); }
         else if (arg == "--mode" && i + 1 < argc) { cli_args.byte_level_mode = (std::string(argv[++i]) == "byte");}
         else if (arg == "--verbose") { cli_args.verbose = true; }
-        else { // Basic unknown argument handling
+        else {
             std::cerr << "[ERROR] Unknown or incomplete argument: " << arg << std::endl;
             printHelp(argv[0]);
             return false;
@@ -592,9 +666,9 @@ int main(int argc, char* argv[]) {
                                        cli_args.byte_level_mode);
         if(success && cli_args.verbose) {
             std::cout << "[SUCCESS] BPE training completed successfully.\n";
-        } else if (!success && !cli_args.verbose) { // Print failure even if not verbose
+        } else if (!success && !cli_args.verbose) {
             std::cout << "[FAILURE] BPE training encountered an error or produced no results.\n";
-        } else if (!success && cli_args.verbose){
+        } else if (!success && cli_args.verbose) {
             // verbose already printed errors
         }
         return success ? 0 : 1;
@@ -614,10 +688,19 @@ int main(int argc, char* argv[]) {
             text_to_tokenize = cli_args.corpus_path_or_input_text;
         }
 
-        std::cout << "[INFO] Tokenize action called. Input (first 50 chars): '" << text_to_tokenize.substr(0, 50) << (text_to_tokenize.length() > 50 ? "..." : "") << "'. Actual tokenization not yet implemented in this step.\n";
+        std::vector<int> token_ids = processor.tokenize(text_to_tokenize);
+        if (!token_ids.empty()) {
+            processor.consoleLog("Tokenization successful. Total tokens: " + std::to_string(token_ids.size()));
+            for (size_t i = 0; i < std::min(token_ids.size(), size_t(10)); ++i) {
+                std::cout << token_ids[i] << (i < token_ids.size() - 1 ? " " : "\n");
+            }
+            if (token_ids.size() > 10) std::cout << "... (total " + std::to_string(token_ids.size()) + " tokens)\n";
+        } else {
+            std::cerr << "[FAILURE] Tokenization failed.\n";
+            return 1;
+        }
         return 0;
-    }
-    else {
+    } else {
         std::cerr << "[ERROR] Unknown action: " << cli_args.action << std::endl;
         printHelp(argv[0]);
         return 1;
