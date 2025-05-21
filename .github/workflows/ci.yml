@@ -41,7 +41,7 @@ jobs:
     outputs: 
       text_cleaner_exec: ${{ steps.set_exec_paths.outputs.text_cleaner_exec }}
       data_analyzer_exec: ${{ steps.set_exec_paths.outputs.data_analyzer_exec }}
-      bpe_processor_exec: ${{ steps.set_exec_paths.outputs.bpe_processor_exec }} # Renamed for clarity
+      bpe_processor_exec: ${{ steps.set_exec_paths.outputs.bpe_processor_exec }} 
 
     steps:
       - name: Checkout repository
@@ -63,7 +63,7 @@ jobs:
           path: | 
             text_cleaner/lunaris_text_cleaner
             data_analyzer/lunaris_data_analyzer
-            bpe_trainer/bpe_processor # Assuming executable is now bpe_processor
+            bpe_trainer/bpe_processor 
           key: ${{ runner.os }}-cpp-exec-${{ hashFiles('Makefile', 'text_cleaner/**/*.cpp', 'data_analyzer/**/*.cpp', 'bpe_trainer/**/*.cpp') }}
           restore-keys: |
             ${{ runner.os }}-cpp-exec-
@@ -71,7 +71,7 @@ jobs:
       - name: Build C++ Utilities (if not cached)
         if: steps.cache-cpp-executables.outputs.cache-hit != 'true'
         run: |
-          make all CXXFLAGS_MODE=RELEASE # 'all' target should build all C++ utils
+          make all CXXFLAGS_MODE=RELEASE 
           echo "C++ utilities built."
 
       - name: Set C++ executable paths
@@ -79,14 +79,12 @@ jobs:
         run: |
           echo "text_cleaner_exec=text_cleaner/lunaris_text_cleaner" >> $GITHUB_OUTPUT
           echo "data_analyzer_exec=data_analyzer/lunaris_data_analyzer" >> $GITHUB_OUTPUT
-          echo "bpe_processor_exec=bpe_trainer/bpe_processor" >> $GITHUB_OUTPUT # Assuming executable is bpe_processor
+          echo "bpe_processor_exec=bpe_trainer/bpe_processor" >> $GITHUB_OUTPUT 
           if [[ "${{ steps.cache-cpp-executables.outputs.cache-hit }}" == "true" ]]; then
             echo "C++ executables were restored from cache."
           fi
 
-      # --- Text Cleaner Test (Unchanged from your version) ---
       - name: Create dummy text file for Text Cleaner CI
-        # ... (your existing run command)
         run: |
           mkdir -p ./temp_text_cleaner_ci_input
           cat <<EOF > ./temp_text_cleaner_ci_input/sample_for_cleaner.txt
@@ -102,8 +100,8 @@ jobs:
           </body> </html>
           EOF
           mkdir -p ./temp_text_cleaner_ci_output
+
       - name: Run and Test C++ Text Cleaner
-        # ... (your existing run command)
         run: |
           TEXT_CLEANER_EXEC="./${{ steps.set_exec_paths.outputs.text_cleaner_exec }}"
           if [ ! -f "$TEXT_CLEANER_EXEC" ]; then echo "ERROR: Text Cleaner executable '$TEXT_CLEANER_EXEC' not found!"; exit 1; fi
@@ -137,7 +135,6 @@ jobs:
             exit 1
           fi
 
-      # --- BpeProcessor (formerly bpe_trainer) Comprehensive Test ---
       - name: Create dummy corpus for BpeProcessor CI
         id: bpe_corpus_setup
         run: |
@@ -160,10 +157,8 @@ jobs:
             --corpus ./temp_bpe_ci/corpus/corpus.txt \
             --vocab-size 270 \
             --output ./temp_bpe_ci/model_output/ci_bpe_model/ \
-            --mode byte \
-            --verbose || { echo "BpeProcessor 'train' action failed"; exit 1; }
+            --mode byte --verbose || { echo "BpeProcessor 'train' action failed"; exit 1; } 
             
-          # Verify output files from training
           if [ ! -f "./temp_bpe_ci/model_output/ci_bpe_model/bpe_model_lunaris.json" ] || \
              [ ! -f "./temp_bpe_ci/model_output/ci_bpe_model/merges_lunaris.txt" ] || \
              [ ! -f "./temp_bpe_ci/model_output/ci_bpe_model/vocabulary_lunaris.txt" ]; then
@@ -174,17 +169,15 @@ jobs:
           echo "BpeProcessor 'train' action successful and output files found."
 
       - name: Test BpeProcessor - Tokenize Action
-        # This step depends on the successful training in the previous step
         if: success() && steps.bpe_train_test.outcome == 'success'
         run: |
           BPE_EXEC="./${{ steps.set_exec_paths.outputs.bpe_processor_exec }}"
-          MODEL_PATH="./temp_bpe_ci/model_output/ci_bpe_model/" # Path to the trained model directory
+          MODEL_PATH="./temp_bpe_ci/model_output/ci_bpe_model/" 
           INPUT_TEXT="hello test world"
           
           echo "--- Testing BpeProcessor: Tokenize Action ---"
           echo "Input text for tokenization: '$INPUT_TEXT'"
           
-          # Execute tokenize action and capture output
           TOKEN_IDS_OUTPUT=$("$BPE_EXEC" --action tokenize --model_path "$MODEL_PATH" --input_text "$INPUT_TEXT" --verbose)
           
           if [ $? -ne 0 ]; then
@@ -193,49 +186,45 @@ jobs:
             exit 1
           fi
           
-          # Basic check: output should not be empty and should contain numbers (token IDs)
           if [ -z "$TOKEN_IDS_OUTPUT" ]; then
             echo "ERROR: BpeProcessor 'tokenize' action produced empty output for non-empty input."
             exit 1
           fi
-          # Check if output contains at least one digit (very basic check for IDs)
           if ! echo "$TOKEN_IDS_OUTPUT" | grep -qE '[0-9]+'; then
             echo "ERROR: BpeProcessor 'tokenize' output does not look like token IDs: $TOKEN_IDS_OUTPUT"
             exit 1
           fi
           echo "BpeProcessor 'tokenize' action successful. Output (first 50 chars): ${TOKEN_IDS_OUTPUT:0:50}..."
-          # A more robust test would compare with expected token IDs, but that requires knowing the exact merges.
-          # For CI, checking successful execution and plausible output format is a good start.
 
-      - name: Final C++ Job Actions & Cleanup 
+      - name: Post C++ Job Failure Comment & Cleanup 
         if: always() 
         run: |
           if [[ "${{ job.status }}" == "failure" && "${{ github.event_name }}" == "pull_request" ]]; then
             echo "::group::Posting C++ Job Failure Comment"
-            COMMENT_BODY="---
-**Lunaris Codex CI Status: FAILED ❌** 
-Workflow: \`${{ github.workflow }}\`
-Job: \`${{ job.name || github.job }}\` (C++ Utilities Test)
-Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
+            # Using here document for multiline body, ensure EOF is not indented
+            read -r -d '' COMMENT_BODY <<EOF
+          ---
+          **Lunaris Codex CI Status: FAILED ❌** 
+          Workflow: \`${{ github.workflow }}\`
+          Job: \`${{ job.name || github.job }}\` (C++ Utilities Test)
+          Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
 
-Some C++ utility checks have failed. Please review the errors.
-➡️ [View Action Logs](\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }})
+          Some C++ utility checks have failed. Please review the errors.
+          ➡️ [View Action Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-*This is an automated message from your friendly Lunaris Codex CI.*"
+          *This is an automated message from your friendly Lunaris Codex CI.*
+          EOF
             gh issue comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "$COMMENT_BODY" \
             || echo "Warning: Failed to post C++ failure comment."
             echo "::endgroup::"
           fi
           echo "Performing C++ job temporary test files cleanup..."
           rm -rf ./temp_text_cleaner_ci_input ./temp_text_cleaner_ci_output expected_output_tc.txt \
-                 ./temp_bpe_ci # Clean up BPE CI test directory
+                 ./temp_bpe_ci 
           echo "C++ job temporary test files cleanup complete."
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
 
-  #---------------------------------------------------------------------------
-  # JOB 2: Test Python Suite (Unchanged from your version, but included for completeness)
-  #---------------------------------------------------------------------------
   test_python_suite:
     name: Test Python Suite
     runs-on: ubuntu-latest
@@ -264,7 +253,7 @@ Some C++ utility checks have failed. Please review the errors.
           export PYTHONPATH=$PYTHONPATH:$(pwd) 
           pytest tests/ -k "test_model" --cov=model --cov-report=xml --cov-report=term-missing
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4 # Updated to v4
+        uses: codecov/codecov-action@v4 
         with:
           token: ${{ secrets.CODECOV_TOKEN }} 
           files: ./coverage.xml 
@@ -350,16 +339,19 @@ Some C++ utility checks have failed. Please review the errors.
         run: |
           if [[ "${{ job.status }}" == "failure" && "${{ github.event_name }}" == "pull_request" ]]; then
             echo "::group::Posting Python Job Failure Comment"
-            COMMENT_BODY="---
-**Lunaris Codex CI Status: FAILED ❌** 
-Workflow: \`${{ github.workflow }}\`
-Job: \`${{ job.name || github.job }}\` (Python Suite Test)
-Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
+            # Using here document for multiline body, ensure EOF is not indented
+            read -r -d '' COMMENT_BODY <<EOF
+          ---
+          **Lunaris Codex CI Status: FAILED ❌** 
+          Workflow: \`${{ github.workflow }}\`
+          Job: \`${{ job.name || github.job }}\` (Python Suite Test)
+          Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
 
-Some Python checks or script executions have failed. Please review the errors.
-➡️ [View Action Logs](\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }})
+          Some Python checks or script executions have failed. Please review the errors.
+          ➡️ [View Action Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-*This is an automated message from your friendly Lunaris Codex CI.*"
+          *This is an automated message from your friendly Lunaris Codex CI.*
+          EOF
             gh issue comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "$COMMENT_BODY" \
             || echo "Warning: Failed to post Python failure comment."
             echo "::endgroup::"
