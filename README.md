@@ -44,18 +44,18 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
     *   Autoregressive text generation with configurable parameters (temperature, top-k, top-p, repetition penalty).
     *   Features prompt loading from files, output saving, and a `--no_color` option.
 *   **C++ Utility Toolkit:**
-    *   **`bpe_trainer` (v0.1.0 - NEW!):** Trains BPE merges from a corpus, enabling the creation of custom tokenizers.
+    *   **`BpeProcessor` (v0.2.0 - Evolved!):** Formerly `bpe_trainer`. Now trains BPE models from a corpus *and* tokenizes text using a trained model. Enables creation and usage of fully custom tokenizers. <!-- MODIFIED -->
     *   **`lunaris_data_analyzer` (v0.2.0):** Inspects `.memmap` datasets, now with configurable `--pad_id`.
     *   **`lunaris_text_cleaner` (v0.3.5):** Cleans raw text, with improved multi-stage HTML cleaning.
 *   **Scalable and Tested:**
-    *   Full E2E pipeline (data prep → train → inference) demonstrated with a ~3M parameter toy model on CPU, and additional overfitting/fine-tuning tests. <!-- Added detail -->
+    *   Full E2E pipeline (data prep → train → inference) demonstrated with toy models on CPU, including overfitting/fine-tuning tests and successful training runs on GPU (CUDA with AMP). <!-- MODIFIED -->
 *   **Continuous Integration (CI) & Automation:**
     *   A comprehensive GitHub Actions workflow (`ci.yml`) tests:
         *   Core Python pipeline (`prepare_data.py`, `train.py`, `inference.py` smoke test).
-        *   Compilation and basic functionality of C++ utilities.
+        *   Compilation and functionality of C++ utilities (including `BpeProcessor` train and tokenize actions). <!-- MODIFIED -->
         *   `model.py` unit tests using `pytest`, with coverage reports sent to Codecov.io.
-    *   Automated Pull Request management for the primary developer, including auto-merge on CI success. <!-- Added detail -->
-    *   Dependabot integration for automated dependency updates (security and version bumps). <!-- Added if Dependabot is active -->
+    *   Automated Pull Request management for the primary developer, including auto-merge on CI success.
+    *   Dependabot integration for automated dependency updates.
 ---
 
 ## Architecture Overview
@@ -157,11 +157,11 @@ python inference.py \
 *Run `python inference.py --help` for all options, including loading prompts from files (`--prompt_file`), saving output (`--output_file`), and disabling rich formatting (`--no_color`).*
 
 ### 5. Using C++ Utilities (Optional)
-Helper tools for data analysis, text cleaning, and tokenizer training are available. Each utility is located in its own directory (e.g., `bpe_trainer/`, `text_cleaner/`, `data_analyzer/`) and includes a `README.md` with specific compilation and usage instructions. They can also be compiled using the main `Makefile` at the root of the repository (e.g., `make bpe_trainer`).
+Helper tools for data analysis, text cleaning, and custom BPE tokenization are available. Each utility is located in its own directory (e.g., `bpe_trainer/` for `BpeProcessor`, `text_cleaner/`, `data_analyzer/`) and includes a `README.md` with specific compilation and usage instructions. They can also be compiled using the main `Makefile` at the root of the repository (e.g., `make bpe_processor`).
 
-*   **`bpe_trainer`**: Trains BPE merges from a corpus to help create custom tokenizers.
-*   **`lunaris_text_cleaner`**: Cleans raw text files before tokenization.
-*   **`lunaris_data_analyzer`**: Inspects and validates `.memmap` dataset files.
+*   **`BpeProcessor`**: (Located in `bpe_trainer/`) Trains BPE models from a corpus and tokenizes text using these custom models. <!-- MODIFIED -->
+*   **`lunaris_text_cleaner`**: Cleans raw text files before tokenization. (Located in `text_cleaner/`)
+*   **`lunaris_data_analyzer`**: Inspects and validates `.memmap` dataset files. (Located in `data_analyzer/`)
 
 ---
 
@@ -173,27 +173,24 @@ Key pages include:
 *   **[Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines)**
 *   [Data Preparation Pipeline](https://github.com/MeryylleA/lunariscodex/wiki/Data-Preparation-Pipeline) (`prepare_data.py`)
 *   [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) (`train.py`)
-*   [Utility: BPE Trainer](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-BPE-Trainer) **(New!)**
+*   [Utility: BPE Processor](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-BPE-Processor) **(Updated!)** <!-- MODIFIED & ASSUMING WIKI PAGE NAME CHANGE -->
 *   [Utility: Lunaris Text Cleaner](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Text-Cleaner)
 *   [Utility: Lunaris Data Analyzer](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Data-Analyzer)
 *   [Tutorial: Training Your First Model](https://github.com/MeryylleA/lunariscodex/wiki/Training-Your-First-Model)
 *   [Tutorial: Using the Lunaris-Data Dataset](https://github.com/MeryylleA/lunariscodex/wiki/Using-the-Lunaris-Data-Dataset)
-<!-- Optional: Add link to inference guide if created -->
-<!-- * [Guide: Generating Text with Inference.py](https://github.com/MeryylleA/lunariscodex/wiki/Guide:-Generating-Text-with-Inference.py) -->
-
 
 ---
 
 ## Roadmap
 
 Our current focus and future plans include:
-*   **Integrating custom BPE tokenizers (trained with `bpe_trainer`) into the `prepare_data.py` script.**
-*   **Enhancing `lunaris_data_analyzer` with token decoding capabilities.**
+*   **Finalize and fully integrate the `BpeProcessor` (custom BPE tokenizer) with `prepare_data.py`, allowing native use of custom-trained tokenizers.** <!-- REPHRASED AND HIGHLIGHTED -->
+*   **Implement detokenization functionality in `BpeProcessor`.** <!-- NEW/SPECIFIC -->
+*   Enhancing `lunaris_data_analyzer` with token decoding capabilities.
 *   Increasing unit test coverage for `model.py`.
 *   Developing a dedicated evaluation script (`evaluate.py`).
 *   Further enhancing `inference.py` (interactive mode, batch generation, etc.).
 *   Expanding documentation: advanced tutorials, API reference.
-*   Providing pre-tokenized versions of common public datasets or robust scripts to process them efficiently.
 *   (Ambitious) Releasing small to medium pretrained base models if resources permit.
 
 ---
