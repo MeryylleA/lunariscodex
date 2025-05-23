@@ -1,5 +1,6 @@
 [![Lunaris Codex CI](https://github.com/MeryylleA/lunariscodex/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MeryylleA/lunariscodex/actions/workflows/ci.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MeryylleA/lunariscodex)
+[![codecov](https://codecov.io/gh/MeryylleA/lunariscodex/branch/main/graph/badge.svg?token=6FHOG5S0HQ)](https://codecov.io/gh/MeryylleA/lunariscodex)
 
 # Lunaris Codex
 
