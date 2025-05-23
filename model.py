@@ -1,4 +1,3 @@
-# model.py
 import math
 import torch
 import torch.nn as nn
@@ -8,9 +7,7 @@ import torch.nn.functional as F
 try:
     from flash_attn import flash_attn_func
     FLASH_ATTENTION_AVAILABLE = True
-    # Using logger after it's configured in train.py or inference.py
-    # For standalone model testing, a simple print is fine.
-    print("INFO: flash_attn library found, will be used for attention on CUDA GPU if enabled.")
+    print("INFO: flash_attn library found, but will be disabled due to ALiBi incompatibility.")
 except ImportError:
     print("WARNING: flash_attn library not found or could not be imported. Using PyTorch standard attention implementation.")
     FLASH_ATTENTION_AVAILABLE = False
@@ -30,26 +27,36 @@ class LunarisCodexConfig:
         top_p=0.95,
         repetition_penalty=1.1,
         lora_rank=32,
-        use_flash_attention_if_available=True,
-        layer_norm_epsilon=1e-5, # Added for consistency
-        ff_multiplier=3,         # Standard multiplier for FFN intermediate dim
-        alibi_implementation="original" # or "simplified_slopes"
+        use_flash_attention_if_available=False,  # Desabilitado por padrão devido ao ALiBi
+        layer_norm_epsilon=1e-6,  # Mais estável que 1e-5
+        ff_multiplier=4,  # Aumentado de 3 para 4 (padrão moderno)
+        alibi_implementation="optimized"
     ):
+        # Estimativa automática do tamanho do modelo para ajustes
+        estimated_params = d_model * n_layers * (d_model * 4 + d_model * ff_multiplier)
+
+        # Para modelos pequenos (<50M), ajustar dropout automaticamente
+        if estimated_params < 50_000_000:
+            original_dropout = dropout
+            dropout = min(dropout, 0.05)  # Reduzir dropout para modelos pequenos
+            if dropout != original_dropout:
+                print(f"Modelo pequeno detectado (~{estimated_params/1_000_000:.1f}M params), dropout ajustado de {original_dropout} para {dropout}")
+
         self.vocab_size = vocab_size
         self.d_model = d_model
         self.n_layers = n_layers
         self.n_heads = n_heads
-        self.max_seq_len = max_seq_len # Max sequence length supported by ALiBi context
+        self.max_seq_len = max_seq_len
         self.dropout = dropout
         self.activation = activation
-        self.temperature = temperature # For generation
-        self.top_k = top_k # For generation
-        self.top_p = top_p # For generation
-        self.repetition_penalty = repetition_penalty # For generation
-        self.lora_rank = lora_rank # Set to 0 or negative to disable LoRA
+        self.temperature = temperature
+        self.top_k = top_k
+        self.top_p = top_p
+        self.repetition_penalty = repetition_penalty
+        self.lora_rank = lora_rank
         self.use_flash_attention_if_available = use_flash_attention_if_available
         self.layer_norm_epsilon = layer_norm_epsilon
-        self.ff_multiplier = ff_multiplier # FFN hidden_dim = d_model * ff_multiplier
+        self.ff_multiplier = ff_multiplier
         self.alibi_implementation = alibi_implementation
 
 
@@ -60,22 +67,19 @@ class LoRALinear(nn.Linear):
         self.has_lora = rank is not None and rank > 0
         if self.has_lora:
             self.rank = rank
-            self.lora_alpha = alpha # Typically, alpha is set to rank or 1.
+            self.lora_alpha = alpha
 
             # LoRA matrices A and B
             self.lora_A = nn.Parameter(torch.Tensor(in_features, rank))
             self.lora_B = nn.Parameter(torch.Tensor(rank, out_features))
 
             # Initialize LoRA weights
-            nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5)) # Kaiming for A
-            nn.init.zeros_(self.lora_B) # Zero for B, so initial adaptation is zero
+            nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+            nn.init.zeros_(self.lora_B)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         original_output = super().forward(x)
-        if self.has_lora: # LoRA path is active only if lora_rank > 0
-            # During training, apply LoRA. For inference, weights can be merged.
-            # Here, we always apply if has_lora, assuming inference might also use this dynamic path
-            # or a separate merge_lora_weights() method would be called.
+        if self.has_lora:
             lora_adaptation = (x @ self.lora_A @ self.lora_B) * (self.lora_alpha / self.rank)
             return original_output + lora_adaptation
         return original_output
@@ -96,69 +100,77 @@ class LunarisMind(nn.Module):
 
         # Tied language modeling head
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
-        self.lm_head.weight = self.token_embedding.weight # Tie weights
+        self.lm_head.weight = self.token_embedding.weight
 
         self._init_alibi_slopes()
-        self.apply(self._init_weights) # Apply custom weight initialization
+        self.apply(self._init_weights)
 
     def _init_alibi_slopes(self):
-        """ Initializes ALiBi slopes based on the number of attention heads. """
-        # Calculates slopes m for ALiBi. Each head h gets a slope m_h.
-        # The original ALiBi paper uses powers of 2.
-        # For n_heads that are powers of 2, it's 2^(-8/n_heads * i)
-        # For others, it's an adaptation or using the closest power of 2.
-        if self.config.alibi_implementation == "original_paper_style": # More complex, needs careful power-of-2 handling
+        """Inicializa ALiBi slopes corrigidos para qualquer número de heads."""
+        def get_slopes(n_heads):
             def get_slopes_power_of_2(n):
-                start = (2**(-2**-(math.log2(n)-3)))
+                start = 2**(-(2**-(math.log2(n)-3)))
                 ratio = start
                 return [start*ratio**i for i in range(n)]
-            if math.log2(self.config.n_heads).is_integer():
-                 slopes_list = get_slopes_power_of_2(self.config.n_heads)
-            else: # Fallback for non-power-of-2 n_heads (e.g., geometric progression)
-                 closest_power_of_2 = 2**math.floor(math.log2(self.config.n_heads))
-                 slopes_list_base = get_slopes_power_of_2(closest_power_of_2)
-                 # Simple interpolation or repetition strategy might be needed
-                 slopes_list = slopes_list_base * (self.config.n_heads // closest_power_of_2) + \
-                               slopes_list_base[:self.config.n_heads % closest_power_of_2]
-                 print(f"WARNING: ALiBi slopes adapted for n_heads={self.config.n_heads} (not power of 2).")
 
-        else: # Simplified geometric progression, as in your original code
-            slopes_list = [2 ** (-(8.0 / self.config.n_heads) * (i + 1)) for i in range(self.config.n_heads)]
+            if n_heads <= 8:
+                # Para n_heads pequenos, usar fórmula simplificada mais estável
+                return [2 ** (-8.0 / n_heads * (i + 1)) for i in range(n_heads)]
+            else:
+                # Para n_heads > 8, usar aproximação baseada em potência de 2
+                if math.log2(n_heads).is_integer():
+                    return get_slopes_power_of_2(n_heads)
+                else:
+                    # Aproximação para números não-potência de 2
+                    closest_power = 2 ** round(math.log2(n_heads))
+                    base_slopes = get_slopes_power_of_2(closest_power)
 
-        slopes = torch.tensor(slopes_list, dtype=torch.float)
+                    if n_heads > closest_power:
+                        # Interpolar slopes adicionais
+                        extra_slopes = []
+                        for i in range(n_heads - closest_power):
+                            ratio = base_slopes[-1] / base_slopes[-2] if len(base_slopes) > 1 else 0.5
+                            extra_slopes.append(base_slopes[-1] * ratio)
+                        return base_slopes + extra_slopes
+                    else:
+                        return base_slopes[:n_heads]
+
+        slopes_list = get_slopes(self.config.n_heads)
+        slopes = torch.tensor(slopes_list, dtype=torch.float32)
         self.register_buffer("alibi_slopes", slopes)
-
+        print(f"ALiBi slopes inicializados para {self.config.n_heads} heads: {[f'{s:.6f}' for s in slopes_list]}")
 
     def _init_weights(self, module):
-        """ Initializes weights for different module types. """
-        if isinstance(module, nn.Linear) and not isinstance(module, LoRALinear): # Standard Linear layers
+        """Inicialização corrigida para evitar gradientes muito pequenos."""
+        if isinstance(module, nn.Linear) and not isinstance(module, LoRALinear):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
-        elif isinstance(module, LoRALinear): # Base weights of LoRALinear
+        elif isinstance(module, LoRALinear):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
-            # LoRA A and B are initialized in LoRALinear.__init__
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
         elif isinstance(module, nn.LayerNorm):
             nn.init.ones_(module.weight)
             nn.init.zeros_(module.bias)
 
-        # Special initialization for output projections in attention and FFN (GPT-2 style)
+        # Inicialização especial menos agressiva para output projections
         if isinstance(module, SelfAttention) or isinstance(module, FeedForward):
-            output_proj_std = 0.02 / math.sqrt(2 * self.config.n_layers)
+            # Fórmula menos agressiva - removido o fator 2 que estava causando gradientes muito pequenos
+            output_proj_std = 0.02 / math.sqrt(self.config.n_layers)
             if isinstance(module, SelfAttention):
                 nn.init.normal_(module.output_proj.weight, mean=0.0, std=output_proj_std)
-                if module.output_proj.bias is not None: nn.init.zeros_(module.output_proj.bias)
+                if module.output_proj.bias is not None:
+                    nn.init.zeros_(module.output_proj.bias)
             if isinstance(module, FeedForward):
                 nn.init.normal_(module.fc2.weight, mean=0.0, std=output_proj_std)
-                if module.fc2.bias is not None: nn.init.zeros_(module.fc2.bias)
-
+                if module.fc2.bias is not None:
+                    nn.init.zeros_(module.fc2.bias)
 
     def get_alibi_attention_bias(self, seq_len, device):
-        """ Generates the ALiBi attention bias tensor combined with a causal mask. """
+        """Generates the ALiBi attention bias tensor combined with a causal mask."""
         # Causal mask: True where attention should be masked (upper triangle)
         causal_mask_bool = torch.triu(torch.ones((seq_len, seq_len), dtype=torch.bool, device=device), diagonal=1)
 
@@ -166,11 +178,9 @@ class LunarisMind(nn.Module):
         # pos_indices represents (j - i) for query position i and key position j
         pos_indices = torch.arange(seq_len, device=device, dtype=self.alibi_slopes.dtype).unsqueeze(0) - \
                       torch.arange(seq_len, device=device, dtype=self.alibi_slopes.dtype).unsqueeze(1)
-        # Shape of pos_indices: (seq_len, seq_len)
 
         # alibi_slopes: (num_heads)
         # alibi_bias_values: (num_heads, seq_len, seq_len)
-        # Each head 'h' has its ALiBi bias: slopes[h] * (j - i)
         alibi_bias_values = self.alibi_slopes.view(-1, 1, 1) * pos_indices.unsqueeze(0)
 
         # Create an additive causal mask (-infinity for masked positions)
@@ -178,27 +188,24 @@ class LunarisMind(nn.Module):
         additive_causal_mask.masked_fill_(causal_mask_bool, float('-inf'))
 
         # Combine ALiBi bias with the additive causal mask
-        # Broadcasting: (num_heads, seq_len, seq_len) + (1, seq_len, seq_len)
         final_bias = alibi_bias_values + additive_causal_mask.unsqueeze(0)
-        return final_bias # Shape: (num_heads, seq_len, seq_len)
+        return final_bias
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor = None) -> torch.Tensor:
         batch_size, seq_len = input_ids.size()
         device = input_ids.device
 
-        x = self.token_embedding(input_ids) # (B, L, D_model)
+        x = self.token_embedding(input_ids)
 
         # ALiBi bias is independent of batch, depends on seq_len and n_heads
-        alibi_combined_bias = self.get_alibi_attention_bias(seq_len, device) # (H, L, L)
+        alibi_combined_bias = self.get_alibi_attention_bias(seq_len, device)
 
         # Prepare padding mask if provided (additive, -inf for padded tokens)
         padding_additive_mask = None
-        if attention_mask is not None: # attention_mask: (B, L), 1 for valid, 0 for pad
-            padding_additive_mask = torch.zeros_like(attention_mask, dtype=x.dtype, device=device) # (B, L)
+        if attention_mask is not None:
+            padding_additive_mask = torch.zeros_like(attention_mask, dtype=x.dtype, device=device)
             padding_additive_mask.masked_fill_(attention_mask == 0, float('-inf'))
-            # Reshape for broadcasting with attention scores (B, H, L, L) or (B, H, L_q, L_k)
-            # Mask needs to affect key positions, so expand for key sequence length dimension
-            padding_additive_mask = padding_additive_mask.unsqueeze(1).unsqueeze(2) # (B, 1, 1, L)
+            padding_additive_mask = padding_additive_mask.unsqueeze(1).unsqueeze(2)
 
         for layer in self.layers:
             x = layer(x, alibi_combined_bias, padding_additive_mask)
@@ -207,33 +214,46 @@ class LunarisMind(nn.Module):
         logits = self.lm_head(x)
         return logits
 
+    def _apply_repetition_penalty_optimized(self, logits, generated_ids, repetition_penalty):
+        """Versão otimizada do repetition penalty usando operações tensoriais."""
+        if repetition_penalty == 1.0:
+            return logits
+
+        batch_size, vocab_size = logits.shape
+
+        # Aplicar penalty de forma mais eficiente
+        for b_idx in range(batch_size):
+            unique_tokens = torch.unique(generated_ids[b_idx])
+            if len(unique_tokens) > 0:
+                token_logits = logits[b_idx, unique_tokens]
+                penalty_mask = token_logits > 0
+
+                # Aplicar penalty de forma vetorizada
+                token_logits[penalty_mask] /= repetition_penalty
+                token_logits[~penalty_mask] *= repetition_penalty
+
+                logits[b_idx, unique_tokens] = token_logits
+
+        return logits
+
     def generate(self, input_ids: torch.Tensor, max_new_tokens=50, temperature=0.8, top_k=50, top_p=0.95, repetition_penalty=1.1, eos_token_id=None):
         """Generates token sequences autoregressively."""
-        self.eval() # Set to evaluation mode
+        self.eval()
         device = input_ids.device
         batch_size = input_ids.size(0)
-        generated_ids = input_ids # (B, current_L)
+        generated_ids = input_ids
 
         for _ in range(max_new_tokens):
             current_seq_len = generated_ids.size(1)
-            # Create attention mask for current generated sequence (assumes no internal padding)
             current_attention_mask = torch.ones((batch_size, current_seq_len), dtype=torch.long, device=device)
 
-            # Get logits for the last token only
-            with torch.no_grad(): # No need to track gradients during generation
-                logits = self.forward(generated_ids, attention_mask=current_attention_mask)[:, -1, :] # (B, VocabSize)
+            with torch.no_grad():
+                logits = self.forward(generated_ids, attention_mask=current_attention_mask)[:, -1, :]
 
-            logits = logits / temperature # Apply temperature scaling
+            logits = logits / temperature
 
-            # Apply repetition penalty
-            if repetition_penalty != 1.0:
-                for b_idx in range(batch_size):
-                    seen_tokens = set(generated_ids[b_idx].tolist())
-                    for token_id in seen_tokens:
-                        if logits[b_idx, token_id] > 0:
-                            logits[b_idx, token_id] /= repetition_penalty
-                        else:
-                            logits[b_idx, token_id] *= repetition_penalty # Makes negative logits more negative
+            # Apply repetition penalty (versão otimizada)
+            logits = self._apply_repetition_penalty_optimized(logits, generated_ids, repetition_penalty)
 
             # Top-k filtering
             if top_k > 0:
@@ -247,57 +267,71 @@ class LunarisMind(nn.Module):
                 cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
 
                 sorted_indices_to_remove = cumulative_probs > top_p
-                # Shift to keep at least one token if all have cumulative prob > top_p
                 sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                sorted_indices_to_remove[..., 0] = False # Always keep the most probable token
+                sorted_indices_to_remove[..., 0] = False
 
                 indices_to_remove = torch.zeros_like(logits, dtype=torch.bool).scatter_(
                     dim=-1, index=sorted_indices, src=sorted_indices_to_remove)
                 logits.masked_fill_(indices_to_remove, float('-inf'))
 
-            probs = F.softmax(logits, dim=-1) # (B, VocabSize)
-            next_token = torch.multinomial(probs, num_samples=1) # (B, 1)
+            probs = F.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
 
             generated_ids = torch.cat((generated_ids, next_token), dim=-1)
 
             if eos_token_id is not None and (next_token == eos_token_id).any():
-                # Check if any sequence in the batch has generated EOS
-                # More robustly, stop generation per sequence if EOS is found.
-                # For simplicity now, stop if any generates EOS.
-                if (next_token.squeeze(-1) == eos_token_id).any(): break
+                if (next_token.squeeze(-1) == eos_token_id).any():
+                    break
 
-        self.train() # Set back to training mode if it was changed
+        self.train()
         return generated_ids
 
 class TransformerDecoderBlock(nn.Module):
     def __init__(self, config: LunarisCodexConfig):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.d_model, eps=config.layer_norm_epsilon)
-        self.attn = SelfAttention(config) # Pass the whole config
+        self.attn = SelfAttention(config)
         self.ln_2 = nn.LayerNorm(config.d_model, eps=config.layer_norm_epsilon)
 
-        # Calculate FFN intermediate dimension
         ffn_intermediate_dim = config.d_model * config.ff_multiplier
         self.ff = FeedForward(config.d_model, ffn_intermediate_dim, config.dropout, config.activation, config.lora_rank)
-
         self.dropout = nn.Dropout(config.dropout)
 
-        # LayerScale parameters (gamma)
-        self.ls_gamma_1 = nn.Parameter(torch.ones(config.d_model) * 0.1)
-        self.ls_gamma_2 = nn.Parameter(torch.ones(config.d_model) * 0.1)
+        # LayerScale apenas para modelos grandes (>50M parâmetros)
+        # Estimativa rápida do número de parâmetros
+        estimated_params = config.d_model * config.n_layers * (config.d_model * 4 + ffn_intermediate_dim)
+        self.use_layerscale = estimated_params > 50_000_000
+
+        if self.use_layerscale:
+            # Inicialização mais conservadora baseada no tamanho do modelo
+            init_val = 1e-4 if estimated_params > 100_000_000 else 0.1
+            self.ls_gamma_1 = nn.Parameter(torch.ones(config.d_model) * init_val)
+            self.ls_gamma_2 = nn.Parameter(torch.ones(config.d_model) * init_val)
+            print(f"LayerScale ativado com valor inicial: {init_val} (modelo ~{estimated_params/1_000_000:.1f}M params)")
+        else:
+            print(f"LayerScale desativado para modelo pequeno (~{estimated_params/1_000_000:.1f}M params)")
 
     def forward(self, x: torch.Tensor, alibi_combined_bias: torch.Tensor, padding_additive_mask: torch.Tensor = None) -> torch.Tensor:
-        # Self-Attention part with pre-LayerNorm and LayerScale
+        # Self-Attention part
         residual = x
         x_norm = self.ln_1(x)
         attn_output = self.attn(x_norm, alibi_combined_bias, padding_additive_mask)
-        x = residual + self.dropout(self.ls_gamma_1 * attn_output) # Apply LayerScale before dropout
 
-        # FeedForward part with pre-LayerNorm and LayerScale
+        if self.use_layerscale:
+            x = residual + self.dropout(self.ls_gamma_1 * attn_output)
+        else:
+            x = residual + self.dropout(attn_output)
+
+        # FeedForward part
         residual = x
         x_norm = self.ln_2(x)
         ff_output = self.ff(x_norm)
-        x = residual + self.dropout(self.ls_gamma_2 * ff_output) # Apply LayerScale before dropout
+
+        if self.use_layerscale:
+            x = residual + self.dropout(self.ls_gamma_2 * ff_output)
+        else:
+            x = residual + self.dropout(ff_output)
+
         return x
 
 class SelfAttention(nn.Module):
@@ -313,53 +347,37 @@ class SelfAttention(nn.Module):
         self.output_proj = LoRALinear(config.d_model, config.d_model, rank=config.lora_rank, bias=False)
 
         self.attn_dropout_p = config.dropout
-        # self.resid_dropout = nn.Dropout(config.dropout) # Residual dropout is applied in TransformerDecoderBlock
 
-        # Determine if FlashAttention can and should be used
-        self.use_flash_attention = FLASH_ATTENTION_AVAILABLE and config.use_flash_attention_if_available
+        # CORREÇÃO CRÍTICA: Desabilitar Flash Attention para garantir ALiBi consistente
+        # Flash Attention padrão não suporta bias custom do ALiBi
+        self.use_flash_attention = False
+        if FLASH_ATTENTION_AVAILABLE and config.use_flash_attention_if_available:
+            print("WARNING: Flash Attention disponível mas desabilitado devido à incompatibilidade com ALiBi custom")
 
     def forward(self, x: torch.Tensor, alibi_combined_bias: torch.Tensor, padding_additive_mask: torch.Tensor = None) -> torch.Tensor:
         batch_size, seq_len, _ = x.shape
         device = x.device
 
-        qkv = self.qkv_proj(x) # (B, L, 3*D)
-        # Reshape and permute for multi-head attention: (3, B, H, L, D_head)
+        qkv = self.qkv_proj(x)
         qkv = qkv.view(batch_size, seq_len, 3, self.n_heads, self.head_dim).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0) # Each is (B, H, L, D_head)
+        q, k, v = qkv.unbind(0)
 
-        if self.use_flash_attention and device.type == 'cuda':
-            # NOTE: flash_attn_func with causal=True handles causal masking.
-            # The passed alibi_combined_bias and padding_additive_mask are NOT directly used by it.
-            # For ALiBi + FlashAttention, a custom kernel or different integration is typically needed.
-            # This path currently provides causal attention via FlashAttention without explicit ALiBi/padding mask.
-            amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-            with torch.cuda.amp.autocast(enabled=True, dtype=amp_dtype):
-                attn_output = flash_attn_func(
-                    q, k, v,
-                    dropout_p=self.attn_dropout_p if self.training else 0.0,
-                    causal=True
-                ) # (B, H, L, D_head)
-        else:
-            # Manual attention implementation with ALiBi and padding support
-            attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim) # (B, H, L, L)
+        # SEMPRE usar implementação manual para garantir ALiBi correto
+        attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
 
-            # Apply ALiBi and padding biases
-            # alibi_combined_bias is (H, L, L) -> needs to be broadcastable to (B, H, L, L)
-            current_bias = alibi_combined_bias.unsqueeze(0) # (1, H, L, L)
-            if padding_additive_mask is not None:
-                # padding_additive_mask is (B, 1, 1, L)
-                current_bias = current_bias + padding_additive_mask # Broadcasts to (B, H, L, L)
+        # Apply ALiBi, causal, and padding biases
+        current_bias = alibi_combined_bias.unsqueeze(0)  # (1, H, L, L)
+        if padding_additive_mask is not None:
+            current_bias = current_bias + padding_additive_mask
 
-            attn_scores = attn_scores + current_bias # Add combined biases
+        attn_scores = attn_scores + current_bias
+        attn_weights = F.softmax(attn_scores, dim=-1)
+        attn_weights = F.dropout(attn_weights, p=self.attn_dropout_p, training=self.training)
+        attn_output = torch.matmul(attn_weights, v)
 
-            attn_weights = F.softmax(attn_scores, dim=-1) # (B, H, L, L)
-            attn_weights = F.dropout(attn_weights, p=self.attn_dropout_p, training=self.training)
-            attn_output = torch.matmul(attn_weights, v) # (B, H, L, D_head)
-
-        # Recombine heads: (B, H, L, D_head) -> (B, L, H, D_head) -> (B, L, D_model)
+        # Recombine heads
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
-
-        output = self.output_proj(attn_output) # (B, L, D_model)
+        output = self.output_proj(attn_output)
         return output
 
 class FeedForward(nn.Module):
@@ -367,26 +385,23 @@ class FeedForward(nn.Module):
         super().__init__()
         self.activation = activation
 
-        # For SwiGLU, the first linear layer projects to 2 * d_ff'
-        # where d_ff' is the effective intermediate dimension after activation.
-        # Here, d_ff is treated as that effective intermediate dimension.
         fc1_out_dim = d_ff * 2 if activation == "swiglu" else d_ff
 
         self.fc1 = LoRALinear(d_model, fc1_out_dim, rank=lora_rank, bias=False)
-        self.fc2 = LoRALinear(d_ff, d_model, rank=lora_rank, bias=False) # Projects back from d_ff
+        self.fc2 = LoRALinear(d_ff, d_model, rank=lora_rank, bias=False)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.activation == "swiglu":
             hidden = self.fc1(x)
             gated, activated = hidden.chunk(2, dim=-1)
-            x = F.silu(gated) * activated # SwiGLU
+            x = F.silu(gated) * activated
         elif self.activation == "gelu":
             x = F.gelu(self.fc1(x))
         else:
             raise ValueError(f"Unsupported activation: {self.activation}")
 
-        x = self.dropout(x) # Dropout is often applied before the second linear layer
+        x = self.dropout(x)
         x = self.fc2(x)
         return x
 
@@ -395,43 +410,43 @@ def count_parameters(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 if __name__ == "__main__":
-    print("Testing LunarisCodex Model Components...")
+    print("Testing LunarisCodex Model Components (Versão Corrigida)...")
 
     # Example config for a small test model
     test_config = LunarisCodexConfig(
         vocab_size=1000,
-        d_model=128,
-        n_layers=2,
-        n_heads=4,
-        max_seq_len=64, # Model's max context for ALiBi
-        lora_rank=8,   # Enable LoRA
-        use_flash_attention_if_available=False # Force fallback for CPU testing
+        d_model=256,   # Tamanho similar ao seu experimento
+        n_layers=6,    # Número de camadas do seu experimento
+        n_heads=4,     # Número de heads do seu experimento
+        max_seq_len=512, # Contexto do seu experimento
+        lora_rank=8,
+        use_flash_attention_if_available=False
     )
-    print(f"Using Flash Attention if available and enabled: {test_config.use_flash_attention_if_available and FLASH_ATTENTION_AVAILABLE and torch.cuda.is_available()}")
 
     model = LunarisMind(test_config)
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total model parameters: {total_params:,}")
 
-    # Simulate LoRA setup for parameter counting
+    # LoRA parameter counting
     trainable_params_val = 0
     if test_config.lora_rank > 0:
         for name, param in model.named_parameters():
-            if 'lora_' in name: param.requires_grad = True; trainable_params_val += param.numel()
-            else: param.requires_grad = False
+            if 'lora_' in name:
+                param.requires_grad = True
+                trainable_params_val += param.numel()
+            else:
+                param.requires_grad = False
     else:
-        for param in model.parameters(): param.requires_grad = True
         trainable_params_val = total_params
+
     print(f"Trainable parameters: {trainable_params_val:,} ({trainable_params_val/total_params*100:.2f}%)")
 
-    # Dummy input for testing forward pass
+    # Test forward pass
     batch_size = 2
-    test_seq_len = 32 # Must be <= config.max_seq_len
+    test_seq_len = 32
     dummy_input_ids = torch.randint(0, test_config.vocab_size, (batch_size, test_seq_len))
-    dummy_attention_mask = torch.ones_like(dummy_input_ids) # No padding
-    # Example with padding:
-    # dummy_attention_mask[:, test_seq_len//2:] = 0
+    dummy_attention_mask = torch.ones_like(dummy_input_ids)
 
     print(f"\nInput IDs shape: {dummy_input_ids.shape}")
     print(f"Attention Mask shape: {dummy_attention_mask.shape}")
@@ -439,16 +454,15 @@ if __name__ == "__main__":
     try:
         print("\nTesting forward pass...")
         logits = model(dummy_input_ids, attention_mask=dummy_attention_mask)
-        print(f"Logits output shape: {logits.shape}") # Expected: (B, L, VocabSize)
+        print(f"Logits output shape: {logits.shape}")
 
-        print("\nTesting generation (very basic)...")
-        # For a real test, a tokenizer and a proper eos_token_id would be needed
+        print("\nTesting generation...")
         generated = model.generate(dummy_input_ids[:, :5], max_new_tokens=5, eos_token_id=None)
-        print(f"Generated IDs shape: {generated.shape}") # Expected: (B, 5 + 5)
+        print(f"Generated IDs shape: {generated.shape}")
         print(f"Generated IDs (first example): {generated[0]}")
-        print("Model component tests completed.")
+        print("✅ Model component tests completed successfully!")
 
     except Exception as e:
-        print(f"ERROR during model component test: {e}")
+        print(f"❌ ERROR during model component test: {e}")
         import traceback
         traceback.print_exc()
