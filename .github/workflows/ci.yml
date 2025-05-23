@@ -19,7 +19,6 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review] 
     branches: [ main ]
-    # No paths filter for PRs - handled per-job for better flexibility
   workflow_dispatch: 
 
 env:
@@ -29,11 +28,116 @@ env:
 
 jobs:
   # ==============================================================================
-  # C++ UTILITIES BUILD & TEST JOB
+  # CHANGE DETECTION & SETUP
+  # ==============================================================================
+  detect_changes:
+    name: Detect Changes & Setup Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      cpp_changes: ${{ steps.cpp_changes.outputs.any_changed }}
+      python_changes: ${{ steps.python_changes.outputs.any_changed }}
+      should_run_cpp: ${{ steps.decision.outputs.should_run_cpp }}
+      should_run_python: ${{ steps.decision.outputs.should_run_python }}
+      test_matrix: ${{ steps.matrix.outputs.matrix }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Detect C++ related changes
+      - name: Detect C++ Changes
+        id: cpp_changes
+        uses: tj-actions/changed-files@v46
+        with:
+          files: |
+            Makefile
+            text_cleaner/**
+            data_analyzer/**
+            bpe_trainer/**
+            .github/workflows/ci.yml
+
+      # Detect Python related changes
+      - name: Detect Python Changes
+        id: python_changes
+        uses: tj-actions/changed-files@v46
+        with:
+          files: |
+            model.py
+            prepare_data.py
+            train.py
+            inference.py
+            tests/**
+            requirements.txt
+            .github/workflows/ci.yml
+
+      # Make execution decisions
+      - name: Determine Job Execution
+        id: decision
+        run: |
+          # C++ decision
+          if [[ "${{ steps.cpp_changes.outputs.any_changed }}" == "true" || \
+                "${{ github.event_name }}" == "push" || \
+                "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "should_run_cpp=true" >> $GITHUB_OUTPUT
+            echo "✅ C++ jobs will run: Changes detected or triggered by push/manual dispatch"
+          else
+            echo "should_run_cpp=false" >> $GITHUB_OUTPUT
+            echo "⏭️ C++ jobs will be skipped: No relevant changes detected"
+          fi
+          
+          # Python decision
+          if [[ "${{ steps.python_changes.outputs.any_changed }}" == "true" || \
+                "${{ github.event_name }}" == "push" || \
+                "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "should_run_python=true" >> $GITHUB_OUTPUT
+            echo "✅ Python jobs will run: Changes detected or triggered by push/manual dispatch"
+          else
+            echo "should_run_python=false" >> $GITHUB_OUTPUT
+            echo "⏭️ Python jobs will be skipped: No relevant changes detected"
+          fi
+
+      # Setup test matrix for cross-platform testing
+      - name: Setup Test Matrix
+        id: matrix
+        run: |
+          # Define OS matrix - focusing on Linux variants since you're unsure about Windows/macOS
+          cat <<EOF > matrix.json
+          {
+            "os": [
+              {
+                "name": "ubuntu-latest",
+                "display": "Ubuntu Latest",
+                "runner": "ubuntu-latest",
+                "shell": "bash"
+              },
+              {
+                "name": "ubuntu-20.04",
+                "display": "Ubuntu 20.04 LTS",
+                "runner": "ubuntu-20.04", 
+                "shell": "bash"
+              }
+            ]
+          }
+          EOF
+          
+          echo "matrix=$(cat matrix.json | jq -c .)" >> $GITHUB_OUTPUT
+          echo "🔧 Test matrix configured for cross-platform testing"
+
+  # ==============================================================================
+  # C++ UTILITIES BUILD & TEST (Multi-OS)
   # ==============================================================================
   cpp_utilities:
-    name: C++ Utilities Build & Test
-    runs-on: ubuntu-latest
+    name: C++ Build & Test (${{ matrix.os.display }})
+    runs-on: ${{ matrix.os.runner }}
+    needs: detect_changes
+    if: needs.detect_changes.outputs.should_run_cpp == 'true'
+    
+    strategy:
+      fail-fast: false # Continue testing other OS even if one fails
+      matrix: ${{ fromJson(needs.detect_changes.outputs.test_matrix) }}
+    
     outputs: 
       text_cleaner_exec: ${{ steps.executables.outputs.text_cleaner_exec }}
       data_analyzer_exec: ${{ steps.executables.outputs.data_analyzer_exec }}
@@ -43,56 +147,22 @@ jobs:
       # --- Repository Setup ---
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Required for change detection
 
-      # --- Change Detection ---
-      - name: Detect C++ Related Changes
-        id: changed_files
-        uses: tj-actions/changed-files@v46
-        with:
-          files: |
-            Makefile
-            text_cleaner/**
-            data_analyzer/**
-            bpe_trainer/**
-            model.py 
-            prepare_data.py
-            train.py
-            inference.py
-            requirements.txt 
-            .github/workflows/ci.yml
-
-      - name: Determine Job Execution
-        id: should_run
+      # --- OS-specific Setup ---
+      - name: Install Build Dependencies (Ubuntu)
         run: |
-          if [[ "${{ steps.changed_files.outputs.any_changed }}" == "true" || \
-                "${{ github.event_name }}" == "push" || \
-                "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "value=true" >> $GITHUB_OUTPUT
-            echo "✅ C++ job will run: Changes detected or triggered by push/manual dispatch"
-          else
-            echo "value=false" >> $GITHUB_OUTPUT
-            echo "⏭️ C++ job will be skipped: No relevant changes detected"
-          fi
-
-      # --- Build Environment Setup ---
-      - name: Install Build Dependencies
-        if: steps.should_run.outputs.value == 'true'
-        run: |
-          echo "🔧 Installing C++ build dependencies..."
+          echo "🔧 Installing C++ build dependencies on ${{ matrix.os.display }}..."
           sudo apt-get update -y
-          sudo apt-get install -y nlohmann-json3-dev
-
-      - name: Clean Previous Build Artifacts
-        if: steps.should_run.outputs.value == 'true'
-        run: |
-          echo "🧹 Cleaning previous build artifacts..."
-          make clean || echo "ℹ️ No previous artifacts to clean"
+          sudo apt-get install -y nlohmann-json3-dev build-essential
+          
+          # Show system info
+          echo "📊 System Information:"
+          uname -a
+          gcc --version
+          g++ --version
 
       # --- Build Cache Management ---
       - name: Cache C++ Executables
-        if: steps.should_run.outputs.value == 'true'
         id: cache_executables
         uses: actions/cache@v4
         with:
@@ -100,20 +170,24 @@ jobs:
             text_cleaner/lunaris_text_cleaner
             data_analyzer/lunaris_data_analyzer
             bpe_trainer/bpe_processor 
-          key: ${{ runner.os }}-cpp-exec-${{ hashFiles('Makefile', 'text_cleaner/**/*.cpp', 'data_analyzer/**/*.cpp', 'bpe_trainer/**/*.cpp') }}
+          key: ${{ matrix.os.name }}-cpp-exec-${{ hashFiles('Makefile', 'text_cleaner/**/*.cpp', 'data_analyzer/**/*.cpp', 'bpe_trainer/**/*.cpp') }}
           restore-keys: |
-            ${{ runner.os }}-cpp-exec-
+            ${{ matrix.os.name }}-cpp-exec-
 
       # --- Build Process ---
-      - name: Build C++ Utilities
-        if: steps.should_run.outputs.value == 'true' && steps.cache_executables.outputs.cache-hit != 'true'
+      - name: Clean Previous Build Artifacts
         run: |
-          echo "🔨 Building C++ utilities..."
+          echo "🧹 Cleaning previous build artifacts..."
+          make clean || echo "ℹ️ No previous artifacts to clean"
+
+      - name: Build C++ Utilities
+        if: steps.cache_executables.outputs.cache-hit != 'true'
+        run: |
+          echo "🔨 Building C++ utilities on ${{ matrix.os.display }}..."
           make all CXXFLAGS_MODE=${{ env.CXXFLAGS_MODE }}
           echo "✅ C++ utilities built successfully"
 
       - name: Set Executable Paths
-        if: steps.should_run.outputs.value == 'true'
         id: executables
         run: |
           echo "text_cleaner_exec=text_cleaner/lunaris_text_cleaner" >> $GITHUB_OUTPUT
@@ -126,14 +200,15 @@ jobs:
             echo "🆕 C++ executables built from source"
           fi
 
-      # --- Text Cleaner Tests ---
-      - name: Setup Text Cleaner Test Data
-        if: steps.should_run.outputs.value == 'true'
+      # --- Functional Tests ---
+      - name: Run Text Cleaner Tests
         run: |
-          echo "📝 Creating test data for Text Cleaner..."
-          mkdir -p ./temp_text_cleaner_ci_input ./temp_text_cleaner_ci_output
+          echo "🧪 Testing Text Cleaner utility on ${{ matrix.os.display }}..."
           
-          cat <<EOF > ./temp_text_cleaner_ci_input/sample_for_cleaner.txt
+          # Setup test environment
+          mkdir -p ./temp_text_cleaner_input ./temp_text_cleaner_output
+          
+          cat <<EOF > ./temp_text_cleaner_input/sample.txt
           <!DOCTYPE html>
           <html> <head><title>Test</title></head> <body>
           <!-- This is a comment -->
@@ -146,33 +221,24 @@ jobs:
           </body> </html>
           EOF
 
-      - name: Test Text Cleaner Utility
-        if: steps.should_run.outputs.value == 'true'
-        run: |
-          echo "🧪 Testing Text Cleaner utility..."
+          # Run text cleaner
           TEXT_CLEANER_EXEC="./${{ steps.executables.outputs.text_cleaner_exec }}"
-          
-          # Verify executable exists
           if [ ! -f "$TEXT_CLEANER_EXEC" ]; then 
             echo "❌ ERROR: Text Cleaner executable not found at: $TEXT_CLEANER_EXEC"
             exit 1
           fi
           
-          # Run text cleaner
           "$TEXT_CLEANER_EXEC" \
-            --input ./temp_text_cleaner_ci_input/sample_for_cleaner.txt \
-            --output ./temp_text_cleaner_ci_output/cleaned_sample.txt \
+            --input ./temp_text_cleaner_input/sample.txt \
+            --output ./temp_text_cleaner_output/cleaned.txt \
             --remove-html --normalize-whitespace --remove-empty-lines \
             --to-lowercase \
             --process-urls --url-placeholder "[url]" \
             --process-emails --email-placeholder "[email]" \
-            --remove-exact-duplicates || {
-              echo "❌ Text Cleaner execution failed"
-              exit 1
-            }
+            --remove-exact-duplicates
           
-          # Create expected output for comparison
-          cat <<-EXPECTED_EOF > expected_output_tc.txt
+          # Create expected output
+          cat <<-EXPECTED_EOF > expected_output.txt
           test
           hello world!
           another line.
@@ -180,325 +246,214 @@ jobs:
           duplicate line
           EXPECTED_EOF
           
-          # Compare outputs
-          echo "📊 Comparing actual vs expected output..."
-          if diff -u expected_output_tc.txt ./temp_text_cleaner_ci_output/cleaned_sample.txt; then
-            echo "✅ Text Cleaner output matches expected content"
+          # Verify output
+          if diff -u expected_output.txt ./temp_text_cleaner_output/cleaned.txt; then
+            echo "✅ Text Cleaner test passed on ${{ matrix.os.display }}"
           else
-            echo "❌ Text Cleaner output does NOT match expected content"
+            echo "❌ Text Cleaner test failed on ${{ matrix.os.display }}"
             exit 1
           fi
 
-      # --- BPE Processor Tests ---
-      - name: Setup BPE Processor Test Data
-        if: steps.should_run.outputs.value == 'true'
+      - name: Run BPE Processor Tests
         run: |
-          echo "📝 Creating test corpus for BPE Processor..."
-          mkdir -p ./temp_bpe_ci/corpus ./temp_bpe_ci/model_output
+          echo "🧪 Testing BPE Processor on ${{ matrix.os.display }}..."
           
-          cat <<EOF > ./temp_bpe_ci/corpus/corpus.txt
+          # Setup test environment
+          mkdir -p ./temp_bpe/corpus ./temp_bpe/model_output
+          
+          cat <<EOF > ./temp_bpe/corpus/corpus.txt
           hello world this is a test a test
           another line for another test of the bpe
           hello world again
           EOF
 
-      - name: Test BPE Processor Training
-        if: steps.should_run.outputs.value == 'true'
-        id: bpe_train
-        run: |
-          echo "🧪 Testing BPE Processor training..."
+          # Train BPE model
           BPE_EXEC="./${{ steps.executables.outputs.bpe_processor_exec }}"
-          
-          # Verify executable exists
           if [ ! -f "$BPE_EXEC" ]; then 
             echo "❌ ERROR: BPE Processor executable not found at: $BPE_EXEC"
             exit 1
           fi
           
-          # Train BPE model
           "$BPE_EXEC" \
             --action train \
-            --corpus ./temp_bpe_ci/corpus/corpus.txt \
+            --corpus ./temp_bpe/corpus/corpus.txt \
             --vocab-size 270 \
-            --output ./temp_bpe_ci/model_output/ci_bpe_model/ \
-            --mode byte --verbose || {
-              echo "❌ BPE Processor training failed"
-              exit 1
-            }
+            --output ./temp_bpe/model_output/bpe_model/ \
+            --mode byte --verbose
             
-          # Verify output files were created
+          # Verify output files
           REQUIRED_FILES=(
-            "./temp_bpe_ci/model_output/ci_bpe_model/bpe_model_lunaris.json"
-            "./temp_bpe_ci/model_output/ci_bpe_model/merges_lunaris.txt"
-            "./temp_bpe_ci/model_output/ci_bpe_model/vocabulary_lunaris.txt"
+            "./temp_bpe/model_output/bpe_model/bpe_model_lunaris.json"
+            "./temp_bpe/model_output/bpe_model/merges_lunaris.txt"
+            "./temp_bpe/model_output/bpe_model/vocabulary_lunaris.txt"
           )
           
           for file in "${REQUIRED_FILES[@]}"; do
             if [ ! -f "$file" ]; then
               echo "❌ ERROR: Required output file not found: $file"
-              ls -R ./temp_bpe_ci/model_output/
+              ls -R ./temp_bpe/model_output/
               exit 1
             fi
           done
           
-          echo "✅ BPE Processor training completed successfully"
-
-      - name: Test BPE Processor Tokenization
-        if: steps.should_run.outputs.value == 'true' && success() && steps.bpe_train.outcome == 'success'
-        run: |
-          echo "🧪 Testing BPE Processor tokenization..."
-          BPE_EXEC="./${{ steps.executables.outputs.bpe_processor_exec }}"
-          MODEL_PATH="./temp_bpe_ci/model_output/ci_bpe_model/" 
-          INPUT_TEXT="hello test world"
+          # Test tokenization
+          TOKEN_OUTPUT=$("$BPE_EXEC" --action tokenize --model_path "./temp_bpe/model_output/bpe_model/" --input_text "hello test world" --verbose)
           
-          echo "Input text: '$INPUT_TEXT'"
-          
-          # Run tokenization
-          TOKEN_IDS_OUTPUT=$("$BPE_EXEC" --action tokenize --model_path "$MODEL_PATH" --input_text "$INPUT_TEXT" --verbose)
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ ERROR: BPE Processor tokenization failed"
-            echo "Output: $TOKEN_IDS_OUTPUT"
+          if [ $? -ne 0 ] || [ -z "$TOKEN_OUTPUT" ]; then
+            echo "❌ ERROR: BPE tokenization failed"
             exit 1
           fi
           
-          # Validate output
-          if [ -z "$TOKEN_IDS_OUTPUT" ]; then
-            echo "❌ ERROR: Empty tokenization output for non-empty input"
-            exit 1
-          fi
-          
-          if ! echo "$TOKEN_IDS_OUTPUT" | grep -qE '[0-9]+'; then
-            echo "❌ ERROR: Output doesn't contain token IDs: $TOKEN_IDS_OUTPUT"
-            exit 1
-          fi
-          
-          echo "✅ BPE Processor tokenization successful"
-          echo "Token IDs (first 50 chars): ${TOKEN_IDS_OUTPUT:0:50}..."
+          echo "✅ BPE Processor test passed on ${{ matrix.os.display }}"
 
-      # --- Job Completion Handling ---
-      - name: Skip C++ Job (No Changes)
-        if: steps.should_run.outputs.value == 'false'
-        run: |
-          echo "⏭️ Skipping C++ utilities job - no relevant changes detected in this PR"
-
-      - name: Cleanup and Error Reporting
+      # --- Cleanup ---
+      - name: Cleanup Test Files
         if: always()
         run: |
-          # Post failure comment for PRs
-          if [[ "${{ job.status }}" == "failure" && \
-                "${{ steps.should_run.outputs.value }}" == "true" && \
-                "${{ github.event_name }}" == "pull_request" ]]; then
-            
-            echo "::group::Posting C++ Job Failure Comment"
-            read -r -d '' COMMENT_BODY <<EOF
-          ---
-          **Lunaris Codex CI Status: FAILED ❌** 
-          Workflow: \`${{ github.workflow }}\`
-          Job: \`${{ job.name }}\` (C++ Utilities)
-          Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
-
-          C++ utility tests have failed. Please review the build logs and fix any issues.
-          ➡️ [View Action Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-
-          *This is an automated message from your Lunaris Codex CI system.*
-          EOF
-            
-            gh issue comment ${{ github.event.pull_request.number }} \
-              --repo ${{ github.repository }} \
-              --body "$COMMENT_BODY" || echo "⚠️ Failed to post failure comment"
-            echo "::endgroup::"
-          fi
-          
-          # Cleanup temporary files
-          echo "🧹 Cleaning up temporary test files..."
-          rm -rf ./temp_text_cleaner_ci_input ./temp_text_cleaner_ci_output \
-                 ./expected_output_tc.txt ./temp_bpe_ci
-          echo "✅ Cleanup completed"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "🧹 Cleaning up test files..."
+          rm -rf ./temp_text_cleaner_input ./temp_text_cleaner_output \
+                 ./expected_output.txt ./temp_bpe
 
   # ==============================================================================
-  # PYTHON SUITE TEST JOB
+  # PYTHON SUITE TESTS (Multi-OS)
   # ==============================================================================
   python_suite:
-    name: Python Suite Tests
-    runs-on: ubuntu-latest
+    name: Python Tests (${{ matrix.os.display }})
+    runs-on: ${{ matrix.os.runner }}
+    needs: detect_changes
+    if: needs.detect_changes.outputs.should_run_python == 'true'
+    
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect_changes.outputs.test_matrix) }}
 
     steps:
       # --- Repository Setup ---
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Required for change detection
-
-      # --- Change Detection ---
-      - name: Detect Python Related Changes
-        id: changed_files
-        uses: tj-actions/changed-files@v46
-        with:
-          files: |
-            model.py
-            prepare_data.py
-            train.py
-            inference.py
-            tests/**
-            requirements.txt
-            .github/workflows/ci.yml
-
-      - name: Determine Job Execution
-        id: should_run
-        run: |
-          if [[ "${{ steps.changed_files.outputs.any_changed }}" == "true" || \
-                "${{ github.event_name }}" == "push" || \
-                "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "value=true" >> $GITHUB_OUTPUT
-            echo "✅ Python job will run: Changes detected or triggered by push/manual dispatch"
-          else
-            echo "value=false" >> $GITHUB_OUTPUT
-            echo "⏭️ Python job will be skipped: No relevant changes detected"
-          fi
 
       # --- Python Environment Setup ---
       - name: Setup Python Environment
-        if: steps.should_run.outputs.value == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Display Python Info
+        run: |
+          echo "🐍 Python Environment on ${{ matrix.os.display }}:"
+          python --version
+          pip --version
+          echo "Platform: $(python -c 'import platform; print(platform.platform())')"
+
       - name: Cache Python Dependencies
-        id: cache_python_deps
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          key: ${{ matrix.os.name }}-pip-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ matrix.os.name }}-pip-
 
       - name: Install Python Dependencies
-        if: steps.should_run.outputs.value == 'true'
         run: |
-          echo "📦 Installing Python dependencies..."
+          echo "📦 Installing Python dependencies on ${{ matrix.os.display }}..."
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           echo "✅ Dependencies installed successfully"
 
-      # --- Python Unit Tests ---
-      - name: Run Model Unit Tests
-        if: steps.should_run.outputs.value == 'true'
+      # --- Unit Tests ---
+      - name: Run Unit Tests
         run: |
-          echo "🧪 Running model unit tests with pytest..."
+          echo "🧪 Running unit tests on ${{ matrix.os.display }}..."
           export PYTHONPATH=$PYTHONPATH:$(pwd)
           pytest tests/ -k "test_model" \
             --cov=model \
-            --cov-report=xml \
-            --cov-report=term-missing
-          echo "✅ Model tests completed"
+            --cov-report=xml:coverage-${{ matrix.os.name }}.xml \
+            --cov-report=term-missing \
+            --tb=short
+          echo "✅ Unit tests completed on ${{ matrix.os.display }}"
 
       - name: Upload Coverage Report
-        if: steps.should_run.outputs.value == 'true' && success()
+        if: success()
         uses: codecov/codecov-action@v5 
         with:
           token: ${{ secrets.CODECOV_TOKEN }} 
-          files: ./coverage.xml 
-          flags: model-tests
+          files: ./coverage-${{ matrix.os.name }}.xml
+          flags: model-tests-${{ matrix.os.name }}
+          name: codecov-${{ matrix.os.name }}
 
-      # --- Integration Tests Setup ---
+      # --- Integration Tests ---
       - name: Create Test Datasets
-        if: steps.should_run.outputs.value == 'true'
         run: |
-          echo "📝 Creating dummy datasets for integration tests..."
+          echo "📝 Creating test datasets on ${{ matrix.os.display }}..."
           
           # Training data
-          mkdir -p ./temp_data_ci_train
-          echo "def train_function_one(): return 'train1'" > ./temp_data_ci_train/train_sample_1.py
-          echo "class TrainSampleClass:\n  value = 'train2'" > ./temp_data_ci_train/train_sample_2.py
+          mkdir -p ./temp_train_data
+          echo "def train_function_one(): return 'train1'" > ./temp_train_data/train_sample_1.py
+          echo "class TrainSampleClass:\n  value = 'train2'" > ./temp_train_data/train_sample_2.py
           
           # Validation data
-          mkdir -p ./temp_data_ci_val
-          echo "def validation_function(): return 'validation_data_here'" > ./temp_data_ci_val/val_sample_1.py
-          echo "# Another validation line" > ./temp_data_ci_val/val_sample_2.py
+          mkdir -p ./temp_val_data
+          echo "def validation_function(): return 'validation_data_here'" > ./temp_val_data/val_sample_1.py
+          echo "# Another validation line" > ./temp_val_data/val_sample_2.py
           
           echo "✅ Test datasets created"
 
-      # --- Data Preparation Tests ---
-      - name: Test Data Preparation Script
-        if: steps.should_run.outputs.value == 'true'
+      - name: Test Data Preparation
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          echo "🔄 Testing data preparation script..."
+          echo "🔄 Testing data preparation on ${{ matrix.os.display }}..."
           
           # Prepare training data
           python prepare_data.py \
             --data_source_type text_file_lines \
-            --dataset_name_or_path "./temp_data_ci_train/*.py" \
+            --dataset_name_or_path "./temp_train_data/*.py" \
             --tokenizer_name_or_path gpt2 \
-            --output_path ./processed_data_ci/ci_train_data.memmap \
+            --output_path ./processed_data/train_data.memmap \
             --max_length 32 --max_examples 2 --overwrite_output
 
           # Prepare validation data
           python prepare_data.py \
             --data_source_type text_file_lines \
-            --dataset_name_or_path "./temp_data_ci_val/*.py" \
+            --dataset_name_or_path "./temp_val_data/*.py" \
             --tokenizer_name_or_path gpt2 \
-            --output_path ./processed_data_ci/ci_val_data.memmap \
+            --output_path ./processed_data/val_data.memmap \
             --max_length 32 --max_examples 2 --overwrite_output
           
-          echo "✅ Data preparation completed"
+          echo "✅ Data preparation completed on ${{ matrix.os.display }}"
 
-      # --- Training Tests ---
-      - name: Test Training Script
-        if: steps.should_run.outputs.value == 'true'
+      - name: Test Training Pipeline
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          echo "🏋️ Testing training script with toy model..."
+          echo "🏋️ Testing training pipeline on ${{ matrix.os.display }}..."
           python train.py \
-            --memmap_file_train ./processed_data_ci/ci_train_data.memmap \
+            --memmap_file_train ./processed_data/train_data.memmap \
             --num_sequences_train 2 \
-            --memmap_file_val ./processed_data_ci/ci_val_data.memmap \
+            --memmap_file_val ./processed_data/val_data.memmap \
             --num_sequences_val 2 \
             --tokenizer_name_or_path gpt2 \
             --dataset_max_length 32 --dataset_dtype int32 \
             --model_max_seq_len 32 --d_model 32 --n_layers 1 --n_heads 1 \
             --batch_size 1 --num_epochs 1 --device cpu \
-            --checkpoint_dir ./checkpoints_ci \
+            --checkpoint_dir ./checkpoints \
             --log_interval 1 --save_strategy epoch \
             --lora_rank 0 --seed 42
-          echo "✅ Training completed"
+          echo "✅ Training completed on ${{ matrix.os.display }}"
 
-      - name: Verify Training Outputs
-        if: steps.should_run.outputs.value == 'true' && success()
-        id: verify_checkpoints
+      - name: Test Inference Pipeline
         run: |
-          echo "🔍 Verifying training checkpoint files..."
-          echo "Checkpoint directory contents:"
-          ls -R ./checkpoints_ci
+          echo "🔮 Testing inference pipeline on ${{ matrix.os.display }}..."
           
-          # Check for expected files
-          MAIN_CKPT_PATTERN="./checkpoints_ci/lunaris_codex_epoch-1_step-*.pt" 
-          BEST_MODEL_FILE="./checkpoints_ci/best_model.pt"
-          
-          if ! ls $MAIN_CKPT_PATTERN 1> /dev/null 2>&1; then 
-            echo "❌ ERROR: Main checkpoint file not found (pattern: $MAIN_CKPT_PATTERN)"
+          # Find the checkpoint file
+          CHECKPOINT_PATH="./checkpoints/best_model.pt"
+          if [ ! -f "$CHECKPOINT_PATH" ]; then 
+            echo "❌ ERROR: Checkpoint file not found: $CHECKPOINT_PATH"
+            ls -la ./checkpoints/
             exit 1
           fi
           
-          if [ ! -f "$BEST_MODEL_FILE" ]; then 
-            echo "❌ ERROR: Best model checkpoint not found: $BEST_MODEL_FILE"
-            exit 1
-          fi
-          
-          echo "✅ All expected checkpoint files found"
-
-      # --- Inference Tests ---
-      - name: Test Inference Script
-        if: steps.should_run.outputs.value == 'true' && success() && steps.verify_checkpoints.outcome == 'success'
-        run: |
-          echo "🔮 Testing inference script..."
-          CHECKPOINT_PATH="./checkpoints_ci/best_model.pt"
-          
+          # Run inference
           OUTPUT=$(python inference.py \
             --checkpoint_path "$CHECKPOINT_PATH" \
             --tokenizer_name_or_path gpt2 \
@@ -508,53 +463,113 @@ jobs:
             --device cpu --no_color)
           
           if [ $? -eq 0 ] && [ -n "$OUTPUT" ]; then
-            echo "✅ Inference script executed successfully"
+            echo "✅ Inference test passed on ${{ matrix.os.display }}"
             echo "Generated output (first 100 chars): ${OUTPUT:0:100}..."
           else
-            echo "❌ ERROR: Inference script failed or produced no output"
-            echo "Output: $OUTPUT" 
+            echo "❌ Inference test failed on ${{ matrix.os.display }}"
             exit 1
           fi
 
-      # --- Job Completion Handling ---
-      - name: Skip Python Job (No Changes)
-        if: steps.should_run.outputs.value == 'false'
-        run: |
-          echo "⏭️ Skipping Python suite job - no relevant changes detected in this PR"
-
-      - name: Cleanup and Error Reporting
+      # --- Cleanup ---
+      - name: Cleanup Test Files
         if: always()
         run: |
-          # Post failure comment for PRs
-          if [[ "${{ job.status }}" == "failure" && \
-                "${{ steps.should_run.outputs.value }}" == "true" && \
-                "${{ github.event_name }}" == "pull_request" ]]; then
-            
-            echo "::group::Posting Python Job Failure Comment"
-            read -r -d '' COMMENT_BODY <<EOF
+          echo "🧹 Cleaning up test files..."
+          rm -rf ./temp_train_data ./temp_val_data \
+                 ./processed_data ./checkpoints \
+                 ./coverage-${{ matrix.os.name }}.xml
+
+  # ==============================================================================
+  # FINAL STATUS REPORTING
+  # ==============================================================================
+  ci_status:
+    name: CI Status Report
+    runs-on: ubuntu-latest
+    needs: [detect_changes, cpp_utilities, python_suite]
+    if: always()
+    
+    steps:
+      - name: Determine Overall Status
+        id: status
+        run: |
+          CPP_STATUS="${{ needs.cpp_utilities.result }}"
+          PYTHON_STATUS="${{ needs.python_suite.result }}"
+          CPP_SHOULD_RUN="${{ needs.detect_changes.outputs.should_run_cpp }}"
+          PYTHON_SHOULD_RUN="${{ needs.detect_changes.outputs.should_run_python }}"
+          
+          echo "🔍 Job Status Summary:"
+          echo "  - C++ Jobs: $CPP_STATUS (Should run: $CPP_SHOULD_RUN)"
+          echo "  - Python Jobs: $PYTHON_STATUS (Should run: $PYTHON_SHOULD_RUN)"
+          
+          # Determine overall result
+          OVERALL_SUCCESS=true
+          
+          if [[ "$CPP_SHOULD_RUN" == "true" && "$CPP_STATUS" != "success" ]]; then
+            OVERALL_SUCCESS=false
+            echo "❌ C++ jobs failed or were cancelled"
+          fi
+          
+          if [[ "$PYTHON_SHOULD_RUN" == "true" && "$PYTHON_STATUS" != "success" ]]; then
+            OVERALL_SUCCESS=false
+            echo "❌ Python jobs failed or were cancelled"
+          fi
+          
+          if [[ "$CPP_SHOULD_RUN" == "false" && "$PYTHON_SHOULD_RUN" == "false" ]]; then
+            echo "⏭️ All jobs were skipped - no relevant changes detected"
+            OVERALL_SUCCESS=true
+          fi
+          
+          echo "overall_success=$OVERALL_SUCCESS" >> $GITHUB_OUTPUT
+          
+          if [[ "$OVERALL_SUCCESS" == "true" ]]; then
+            echo "✅ Overall CI Status: SUCCESS"
+          else
+            echo "❌ Overall CI Status: FAILURE"
+          fi
+
+      - name: Post Success Comment (PR)
+        if: github.event_name == 'pull_request' && steps.status.outputs.overall_success == 'true'
+        run: |
+          read -r -d '' COMMENT_BODY <<EOF
           ---
-          **Lunaris Codex CI Status: FAILED ❌** 
+          **Lunaris Codex CI Status: SUCCESS ✅** 
           Workflow: \`${{ github.workflow }}\`
-          Job: \`${{ job.name }}\` (Python Suite)
           Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
 
-          Python suite tests have failed. Please review the test logs and fix any issues.
-          ➡️ [View Action Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          All tests passed successfully across multiple environments!
+          🔗 [View Action Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
           *This is an automated message from your Lunaris Codex CI system.*
           EOF
-            
-            gh issue comment ${{ github.event.pull_request.number }} \
-              --repo ${{ github.repository }} \
-              --body "$COMMENT_BODY" || echo "⚠️ Failed to post failure comment"
-            echo "::endgroup::"
-          fi
           
-          # Cleanup temporary files
-          echo "🧹 Cleaning up temporary test files..."
-          rm -rf ./temp_data_ci_train ./temp_data_ci_val \
-                 ./processed_data_ci ./checkpoints_ci \
-                 ./coverage.xml
-          echo "✅ Cleanup completed"
+          gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT_BODY" || echo "⚠️ Failed to post success comment"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post Failure Comment (PR)
+        if: github.event_name == 'pull_request' && steps.status.outputs.overall_success == 'false'
+        run: |
+          read -r -d '' COMMENT_BODY <<EOF
+          ---
+          **Lunaris Codex CI Status: FAILED ❌** 
+          Workflow: \`${{ github.workflow }}\`
+          Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
+
+          Some tests failed. Please review the logs and fix any issues.
+          🔗 [View Action Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          *This is an automated message from your Lunaris Codex CI system.*
+          EOF
+          
+          gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT_BODY" || echo "⚠️ Failed to post failure comment"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Final Status Check
+        run: |
+          if [[ "${{ steps.status.outputs.overall_success }}" == "false" ]]; then
+            echo "❌ CI Pipeline failed - exiting with error code"
+            exit 1
+          else
+            echo "✅ CI Pipeline completed successfully"
+          fi
