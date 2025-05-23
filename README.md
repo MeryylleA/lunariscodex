@@ -73,6 +73,52 @@ Lunaris Codex implements a standard decoder-only Transformer architecture with s
 
 ---
 
+## Detailed Model Architecture
+
+The Lunaris model is a sophisticated Transformer-based decoder architecture designed for advanced language understanding and generation tasks. Below is a breakdown of its core components and features:
+
+### Core Components
+
+*   **`LunarisCodexConfig`**: This class serves as the central configuration hub for the model. It defines crucial hyperparameters such as vocabulary size (`vocab_size`), model dimensionality (`d_model`), number of transformer layers (`n_layers`), number of attention heads (`n_heads`), maximum sequence length (`max_seq_len`), dropout rates, activation functions (e.g., SwiGLU), and LoRA rank (`lora_rank`). It also incorporates adaptive settings, such as adjusting dropout for smaller model variants to optimize performance.
+
+*   **`LoRALinear`**: Lunaris integrates Low-Rank Adaptation (LoRA) through this class. `LoRALinear` layers are used in place of standard linear layers within the attention and feed-forward network components. This allows for efficient fine-tuning by significantly reducing the number of trainable parameters, as only the LoRA adapter weights are typically updated.
+
+*   **`LunarisMind`**: This is the main class that encapsulates the entire Lunaris model. It orchestrates the various parts of the architecture, including:
+    *   Token Embeddings: Input tokens are converted into dense vector representations.
+    *   A stack of `TransformerDecoderBlock` layers.
+    *   A final layer normalization step.
+    *   A tied language modeling head, where the output linear layer shares weights with the token embedding layer. This is a common technique to reduce model size and improve performance.
+
+*   **`TransformerDecoderBlock`**: Each decoder block is a fundamental building unit of the Lunaris model. It consists of:
+    *   Layer Normalization: Applied before the self-attention and feed-forward sub-layers.
+    *   `SelfAttention`: The attention mechanism.
+    *   `FeedForward`: A position-wise feed-forward network.
+    *   Dropout: Applied for regularization.
+    *   Optional LayerScale: For larger model configurations, LayerScale is used to stabilize training by adaptively scaling the outputs of residual connections.
+
+*   **`SelfAttention`**: This module implements multi-head self-attention.
+    *   It uses `LoRALinear` for its query, key, value, and output projection layers.
+    *   A key feature is its **custom ALiBi (Attention with Linear Biases) implementation**. ALiBi provides an alternative to traditional positional embeddings by directly biasing attention scores based on token distance. The custom implementation in Lunaris ensures correct ALiBi application even with a variable number of attention heads.
+    *   Notably, **Flash Attention is explicitly disabled** if available. This decision is due to incompatibilities between standard Flash Attention implementations and the precise biasing required by the custom ALiBi mechanism. The model defaults to a PyTorch standard attention implementation to ensure the integrity of ALiBi.
+
+*   **`FeedForward`**: This module is a standard position-wise feed-forward network, typically consisting of two linear transformations with an activation function in between.
+    *   It uses `LoRALinear` for its linear layers.
+    *   The activation function is configurable via `LunarisCodexConfig`, with options like SwiGLU or GeLU.
+
+### Special Features
+
+*   **ALiBi (Attention with Linear Biases)**: Lunaris employs a custom ALiBi implementation. Instead of adding explicit positional embeddings to the input tokens, ALiBi modifies attention scores based on the distance between query and key tokens. This method has been shown to improve extrapolation to longer sequence lengths. The implementation is carefully designed to work correctly across different numbers of attention heads.
+
+*   **LoRA (Low-Rank Adaptation)**: LoRA is used in linear layers within the self-attention and feed-forward modules. This allows for more parameter-efficient fine-tuning. During fine-tuning, the original pre-trained model weights are kept frozen, and only the smaller LoRA adapter matrices are updated.
+
+*   **Tied Embeddings**: The weights of the token embedding layer and the final language modeling head are shared. This reduces the total number of parameters in the model and can lead to improved performance.
+
+*   **Configurable Architecture**: Many aspects of the model, such as its size (`d_model`, `n_layers`, `n_heads`), dropout rates, LoRA rank (`lora_rank`), and activation functions, are configurable through the `LunarisCodexConfig` class, allowing users to tailor the model to specific requirements.
+
+This architecture aims to provide a robust and adaptable foundation for various natural language processing tasks, with a focus on efficient training and fine-tuning through LoRA and effective positional encoding via ALiBi.
+
+---
+
 ## Getting Started
 
 This section outlines the basic steps to get Lunaris Codex up and running. Note that training effective Large Language Models typically requires substantial datasets and computational resources.
