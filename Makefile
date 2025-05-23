@@ -4,43 +4,52 @@ CXX := g++
 CPP_STD := -std=c++17
 WARNING_FLAGS := -Wall -Wextra -pedantic
 
+# Adicione o caminho para os headers de terceiros
+INCLUDE_PATHS := -I./third_party
+
 OPTIMIZATION_FLAGS_RELEASE := -O2 -DNDEBUG
 OPTIMIZATION_FLAGS_DEBUG := -g -O0
 
-# Default to RELEASE if not specified
 CXXFLAGS_MODE ?= RELEASE
 ifeq ($(CXXFLAGS_MODE),DEBUG)
-    CURRENT_CXXFLAGS := $(CPP_STD) $(WARNING_FLAGS) $(OPTIMIZATION_FLAGS_DEBUG)
+    CURRENT_CXXFLAGS := $(CPP_STD) $(WARNING_FLAGS) $(OPTIMIZATION_FLAGS_DEBUG) $(INCLUDE_PATHS)
     BUILD_TYPE_MSG := "Debug build"
 else
-    CURRENT_CXXFLAGS := $(CPP_STD) $(WARNING_FLAGS) $(OPTIMIZATION_FLAGS_RELEASE)
+    CURRENT_CXXFLAGS := $(CPP_STD) $(WARNING_FLAGS) $(OPTIMIZATION_FLAGS_RELEASE) $(INCLUDE_PATHS)
     BUILD_TYPE_MSG := "Release build"
+endif
+
+# OS-specific executable suffix
+EXE_SUFFIX :=
+ifeq ($(OS),Windows_NT)
+    EXE_SUFFIX := .exe
+    # Para <filesystem> com MinGW, pode ser necessário linkar explicitamente
+    # BPE_PROCESSOR_LIBS := -lstdc++fs # Já definido abaixo, mas certifique-se que seu MinGW suporta.
 endif
 
 # --- Tool Definitions ---
 TEXT_CLEANER_SRC := text_cleaner/lunaris_text_cleaner.cpp
-TEXT_CLEANER_TARGET := text_cleaner/lunaris_text_cleaner
+TEXT_CLEANER_TARGET := text_cleaner/lunaris_text_cleaner$(EXE_SUFFIX)
 
 DATA_ANALYZER_SRC := data_analyzer/lunaris_data_analyzer.cpp
-DATA_ANALYZER_TARGET := data_analyzer/lunaris_data_analyzer
+DATA_ANALYZER_TARGET := data_analyzer/lunaris_data_analyzer$(EXE_SUFFIX)
 
 BPE_PROCESSOR_SRC := bpe_trainer/bpe_processor.cpp
-BPE_PROCESSOR_TARGET := bpe_trainer/bpe_processor
-# -lstdc++fs is mostly for older GCC versions for std::filesystem.
-# Modern GCC/Clang link it automatically if -std=c++17 is used.
-# Let's keep it conditional or let the CI handle specific libs.
-# For cross-platform, this might become more complex.
-# For now, let's remove it from here and rely on implicit linking or OS-specific install.
-BPE_PROCESSOR_LIBS := # No direct explicit libs here for simplicity
+BPE_PROCESSOR_TARGET := bpe_trainer/bpe_processor$(EXE_SUFFIX)
+# Para g++ >= 9, -lstdc++fs pode ser suficiente. Para MinGW, pode precisar de -static-libstdc++ -static-libgcc se quiser portabilidade e o filesystem não estiver linkando bem.
+# No entanto, o -lstdc++fs é o padrão a tentar primeiro.
+BPE_PROCESSOR_LIBS := -lstdc++fs
 
 # --- Debugging ---
+$(info INFO: OS = $(OS))
+$(info INFO: EXE_SUFFIX = $(EXE_SUFFIX))
 $(info INFO: CURRENT_CXXFLAGS = $(CURRENT_CXXFLAGS))
-$(info INFO: TEXT_CLEANER_SRC = $(TEXT_CLEANER_SRC))
 $(info INFO: TEXT_CLEANER_TARGET = $(TEXT_CLEANER_TARGET))
-$(info INFO: DATA_ANALYZER_SRC = $(DATA_ANALYZER_SRC))
 $(info INFO: DATA_ANALYZER_TARGET = $(DATA_ANALYZER_TARGET))
-$(info INFO: BPE_PROCESSOR_SRC = $(BPE_PROCESSOR_SRC))
 $(info INFO: BPE_PROCESSOR_TARGET = $(BPE_PROCESSOR_TARGET))
+
+# Path para o header JSON (para usar como pré-requisito)
+JSON_HEADER := third_party/nlohmann/json.hpp
 
 # Default target
 all: $(TEXT_CLEANER_TARGET) $(DATA_ANALYZER_TARGET) $(BPE_PROCESSOR_TARGET)
@@ -52,15 +61,17 @@ all: $(TEXT_CLEANER_TARGET) $(DATA_ANALYZER_TARGET) $(BPE_PROCESSOR_TARGET)
 	@echo "----------------------------------------------------"
 
 # --- Build Rules ---
-$(TEXT_CLEANER_TARGET): $(TEXT_CLEANER_SRC) Makefile
+# Adicionado $(JSON_HEADER) como pré-requisito para cada alvo que possa usá-lo.
+# Se um alvo específico não usa JSON, você pode remover $(JSON_HEADER) da sua lista de pré-requisitos.
+$(TEXT_CLEANER_TARGET): $(TEXT_CLEANER_SRC) $(JSON_HEADER) Makefile
 	@echo "Building Text Cleaner..."
 	$(CXX) $(CURRENT_CXXFLAGS) $(TEXT_CLEANER_SRC) -o $(TEXT_CLEANER_TARGET)
 
-$(DATA_ANALYZER_TARGET): $(DATA_ANALYZER_SRC) Makefile
+$(DATA_ANALYZER_TARGET): $(DATA_ANALYZER_SRC) $(JSON_HEADER) Makefile
 	@echo "Building Data Analyzer..."
 	$(CXX) $(CURRENT_CXXFLAGS) $(DATA_ANALYZER_SRC) -o $(DATA_ANALYZER_TARGET)
 
-$(BPE_PROCESSOR_TARGET): $(BPE_PROCESSOR_SRC) Makefile
+$(BPE_PROCESSOR_TARGET): $(BPE_PROCESSOR_SRC) $(JSON_HEADER) Makefile
 	@echo "Building BPE Processor..."
 	$(CXX) $(CURRENT_CXXFLAGS) $(BPE_PROCESSOR_SRC) -o $(BPE_PROCESSOR_TARGET) $(BPE_PROCESSOR_LIBS)
 
@@ -77,9 +88,9 @@ debug_all: ; $(MAKE) all CXXFLAGS_MODE=DEBUG
 # --- Clean Target ---
 clean:
 	@echo "Cleaning C++ utilities..."
-	rm -f $(TEXT_CLEANER_TARGET) $(DATA_ANALYZER_TARGET) $(BPE_PROCESSOR_TARGET)
-	# On Windows, executables might have .exe extension.
-	rm -f $(TEXT_CLEANER_TARGET).exe $(DATA_ANALYZER_TARGET).exe $(BPE_PROCESSOR_TARGET).exe
+	rm -f text_cleaner/lunaris_text_cleaner* \
+	      data_analyzer/lunaris_data_analyzer* \
+	      bpe_trainer/bpe_processor*
 	@echo "Cleanup complete."
 
 .PHONY: all text_cleaner data_analyzer bpe_processor clean debug_text_cleaner debug_data_analyzer debug_bpe_processor debug_all
