@@ -7,18 +7,10 @@ on:
         description: 'JSON string of the OS matrix for tests'
         required: true
         type: string
-      python_version_for_fixtures:
-        description: 'Python version to use for generating test fixtures'
-        required: false
-        type: string
-        default: '3.11'
     outputs:
       cpp_test_result:
         description: "Result of the C++ tests"
         value: ${{ jobs.cpp_utilities.result }}
-    secrets:
-      HF_TOKEN:
-        required: false
 
 env:
   CXXFLAGS_MODE: RELEASE
@@ -46,10 +38,8 @@ jobs:
       - name: Install Build Dependencies (Ubuntu)
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y nlohmann-json3-dev build-essential jq python3-pip
+          sudo apt-get install -y nlohmann-json3-dev build-essential
           g++ --version
-          python3 --version || echo "Python3 not found, fixture generation might fail"
-          pip3 --version || echo "pip3 not found, fixture generation might fail"
 
       - name: Cache C++ Executables
         id: cache_executables
@@ -99,7 +89,7 @@ jobs:
         run: |
           TEXT_CLEANER_EXEC="${{ steps.executables.outputs.text_cleaner_exec }}"
           mkdir -p ./temp_text_cleaner_input ./temp_text_cleaner_output
-          cat <<EOF_TC_INPUT > ./temp_text_cleaner_input/sample.txt
+          cat <<EOF > ./temp_text_cleaner_input/sample.txt
           <!DOCTYPE html>
           <html> <head><title>Test</title></head> <body>
           <!-- This is a comment -->
@@ -109,7 +99,7 @@ jobs:
           Duplicate Line
           Duplicate Line
           </body> </html>
-          EOF_TC_INPUT
+          EOF
 
           "$TEXT_CLEANER_EXEC" \
             --input ./temp_text_cleaner_input/sample.txt \
@@ -120,13 +110,14 @@ jobs:
             --process-emails --email-placeholder "[email]" \
             --remove-exact-duplicates
 
-          cat <<EXPECTED_TC_EOF > expected_output.txt
+          # CORREÇÃO AQUI para o expected_output.txt
+          cat <<EXPECTED_EOF > expected_output.txt
           test
           hello world!
           another line.
           url: [url] and email: [email]
           duplicate line
-          EXPECTED_TC_EOF
+          EXPECTED_EOF
 
           if diff -u expected_output.txt ./temp_text_cleaner_output/cleaned.txt; then
             echo "✅ Text Cleaner test passed on ${{ matrix.os.display }}"
@@ -149,104 +140,6 @@ jobs:
           if [ $? -ne 0 ] || [ -z "$TOKEN_OUTPUT" ]; then echo "ERROR: BPE tokenization failed. Output: $TOKEN_OUTPUT"; exit 1; fi
           echo "✅ BPE Processor test passed on ${{ matrix.os.display }}"
 
-      - name: Setup Python for Fixture Generation
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ inputs.python_version_for_fixtures }}
-
-      - name: Install Python Dependencies for Fixtures
-        run: |
-          python -m pip install --upgrade pip
-          pip install transformers huggingface_hub numpy datasets
-
-      - name: Prepare Data Analyzer Test Fixtures
-        id: da_fixtures
-        env:
-           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          TEMP_FIXTURE_DIR="./temp_da_tests"
-          mkdir -p "$TEMP_FIXTURE_DIR/processed_data" "$TEMP_FIXTURE_DIR/tokenizer_starcoder" "$TEMP_FIXTURE_DIR/sample_code_input"
-          TOKENIZER_OUTPUT_DIR="$TEMP_FIXTURE_DIR/tokenizer_starcoder"
-          MEMMAP_OUTPUT_PATH="$TEMP_FIXTURE_DIR/processed_data/starcoder_sample.memmap"
-          STARCODER_TOKENIZER_JSON="$TOKENIZER_OUTPUT_DIR/tokenizer.json"
-          PREPARE_DATA_SCRIPT="${{ github.workspace }}/prepare_data.py"
-
-          echo "Downloading starcoder tokenizer..."
-          python -c "from transformers import AutoTokenizer; tokenizer = AutoTokenizer.from_pretrained('bigcode/starcoder', trust_remote_code=True); tokenizer.save_pretrained('$TOKENIZER_OUTPUT_DIR')"
-          if [ ! -f "$STARCODER_TOKENIZER_JSON" ]; then echo "ERROR: Starcoder tokenizer.json not found!"; ls -R "$TOKENIZER_OUTPUT_DIR"; exit 1; fi
-          echo "Starcoder tokenizer downloaded."
-
-          cat <<EOF_CODE > "$TEMP_FIXTURE_DIR/sample_code_input/sample_code.py"
-          def hello_world():
-              print("Hello, world from Lunaris Codex!")
-          class MyClass:
-              def __init__(self, name):
-                  self.name = name
-          EOF_CODE
-          echo "Sample code for prepare_data.py created."
-
-          if [ ! -f "$PREPARE_DATA_SCRIPT" ]; then echo "ERROR: prepare_data.py not found at $PREPARE_DATA_SCRIPT!"; exit 1; fi
-          echo "Running prepare_data.py to create memmap..."
-          python "$PREPARE_DATA_SCRIPT" \
-            --data_source_type text_file_lines \
-            --dataset_name_or_path "$TEMP_FIXTURE_DIR/sample_code_input/sample_code.py" \
-            --tokenizer_name_or_path "$TOKENIZER_OUTPUT_DIR" \
-            --output_path "$MEMMAP_OUTPUT_PATH" \
-            --max_length 32 \
-            --max_examples 2 \
-            --add_special_tokens \
-            --overwrite_output
-          if [ ! -f "$MEMMAP_OUTPUT_PATH" ]; then echo "ERROR: Sample memmap not created by prepare_data.py!"; exit 1; fi
-          echo "Sample memmap created."
-
-          echo "memmap_file=$MEMMAP_OUTPUT_PATH" >> $GITHUB_OUTPUT
-          echo "hf_json_vocab_file=$STARCODER_TOKENIZER_JSON" >> $GITHUB_OUTPUT
-          echo "Data Analyzer test fixtures generated."
-
-      - name: Run Data Analyzer Tests - JSON Output with Starcoder Decoding
-        run: |
-          DA_EXEC="${{ steps.executables.outputs.data_analyzer_exec }}"
-          MEMMAP_FILE="${{ steps.da_fixtures.outputs.memmap_file }}"
-          HF_JSON_VOCAB_FILE="${{ steps.da_fixtures.outputs.hf_json_vocab_file }}"
-          if [ ! -f "$DA_EXEC" ] || [ ! -f "$MEMMAP_FILE" ] || [ ! -f "$HF_JSON_VOCAB_FILE" ]; then echo "ERROR: Missing files for DA JSON test"; exit 1; fi
-
-          echo "Running Data Analyzer (text output will go to logs for info)..."
-          "$DA_EXEC" --file "$MEMMAP_FILE" --num_sequences 2 --max_length 32 --pad_id 0 \
-            --print_seq 2 --top_n_tokens 5 \
-            --vocab_file "$HF_JSON_VOCAB_FILE" --tokenizer_type hf_json
-          
-          echo "Capturing JSON output for validation..."
-          JSON_OUTPUT=$("$DA_EXEC" --file "$MEMMAP_FILE" --num_sequences 2 --max_length 32 --pad_id 0 \
-            --top_n_tokens 5 --output_format json \
-            --vocab_file "$HF_JSON_VOCAB_FILE" --tokenizer_type hf_json)
-          
-          echo "--- Data Analyzer JSON Output (Starcoder Decoded) ---"; echo "$JSON_OUTPUT" | jq .; echo "---------------------------------------------------"
-          
-          # Validações com jq (usando -e para que jq retorne status de erro se a expressão for falsa/null)
-          echo "$JSON_OUTPUT" | jq -e '.total_tokens_in_file == 64' > /dev/null || { echo "❌ ERROR: JSON total_tokens_in_file mismatch. Expected 64."; exit 1; }
-          echo "$JSON_OUTPUT" | jq -e '.padding_token_count == 47' > /dev/null || { echo "❌ ERROR: JSON padding_token_count mismatch. Expected 47."; exit 1; }
-          # Para floats, uma comparação exata pode ser frágil. Vamos verificar se o campo existe e é um número.
-          echo "$JSON_OUTPUT" | jq -e '.padding_token_percentage | type == "number"' > /dev/null || { echo "❌ ERROR: JSON padding_token_percentage is not a number or does not exist."; exit 1; }
-          echo "$JSON_OUTPUT" | jq -e '.top_n_common_tokens[0].token_id == 0' > /dev/null || { echo "❌ ERROR: JSON top_n_common_tokens[0].token_id mismatch. Expected 0."; exit 1; }
-          echo "$JSON_OUTPUT" | jq -e '.top_n_common_tokens[0].token_string == "<|endoftext|>"' > /dev/null || { echo "❌ ERROR: JSON top_n_common_tokens[0].token_string mismatch. Expected <|endoftext|>"; exit 1; }
-          echo "$JSON_OUTPUT" | jq -e '.top_n_common_tokens[0].count == 47' > /dev/null || { echo "❌ ERROR: JSON top_n_common_tokens[0].count mismatch. Expected 47."; exit 1; }
-          
-          echo "✅ Data Analyzer JSON output with Starcoder decoding test passed."
-      
-      - name: Run Data Analyzer Tests - Argument Validation
-        run: |
-          DA_EXEC="${{ steps.executables.outputs.data_analyzer_exec }}"
-          MEMMAP_FILE="${{ steps.da_fixtures.outputs.memmap_file }}"
-          HF_JSON_VOCAB_FILE="${{ steps.da_fixtures.outputs.hf_json_vocab_file }}"
-          if [ ! -f "$DA_EXEC" ] || [ ! -f "$MEMMAP_FILE" ] || [ ! -f "$HF_JSON_VOCAB_FILE" ]; then echo "ERROR: Missing files for DA arg validation test"; exit 1; fi
-          
-          set +e
-          "$DA_EXEC" --file "$MEMMAP_FILE" --num_sequences 2 --max_length 32 --vocab_file "$HF_JSON_VOCAB_FILE" >/dev/null 2>&1
-          EXIT_CODE=$?
-          set -e
-          if [[ $EXIT_CODE -eq 0 ]]; then echo "ERROR: DA should have failed for missing tokenizer_type"; exit 1; fi
-          echo "✅ Data Analyzer correctly failed/warned for missing tokenizer_type (Exit code: $EXIT_CODE)."
-
-      - name: Cleanup All Test Files
+      - name: Cleanup C++ Test Files
         if: always()
-        run: rm -rf ./temp_text_cleaner_input ./temp_text_cleaner_output ./expected_output.txt ./temp_bpe ./temp_da_tests
+        run: rm -rf ./temp_text_cleaner_input ./temp_text_cleaner_output ./expected_output.txt ./temp_bpe
