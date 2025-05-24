@@ -35,10 +35,9 @@ on:
       - 'LICENSE'
       - 'docs/**'
 
-# Permissões para o GITHUB_TOKEN usado neste workflow
 permissions:
-  contents: read        # Necessário para actions/checkout
-  pull-requests: write # Necessário para gh pr comment
+  contents: read
+  pull-requests: write
 
 env:
   CXXFLAGS_MODE: RELEASE
@@ -172,7 +171,8 @@ jobs:
     uses: ./.github/workflows/reusable_cpp_tests.yml
     with:
       test_matrix_json: ${{ needs.detect_changes.outputs.test_matrix }}
-    secrets: inherit
+      python_version_for_fixtures: '3.11' # Passa a versão do Python para gerar os fixtures
+    secrets: inherit # Se o reusable_cpp_tests precisar de segredos, eles são herdados
 
   call_python_tests:
     name: Call Python Tests Workflow
