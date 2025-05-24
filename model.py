@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Attempt to import flash_attn, but allow fallback
+# Attempt to import flash_attn, but allow fallback test
 try:
     from flash_attn import flash_attn_func
     FLASH_ATTENTION_AVAILABLE = True
