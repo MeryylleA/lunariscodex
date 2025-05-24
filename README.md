@@ -2,6 +2,8 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MeryylleA/lunariscodex)
 [![codecov](https://codecov.io/gh/MeryylleA/lunariscodex/branch/main/graph/badge.svg?token=6FHOG5S0HQ)](https://codecov.io/gh/MeryylleA/lunariscodex)
 
+test
+
 # Lunaris Codex
 
 **Lunaris Codex** is a highly flexible and customizable Transformer Decoder architecture designed for code generation and language modeling. Written entirely in PyTorch, it features state-of-the-art components and a complete pipeline for data preparation, training, and inference.
