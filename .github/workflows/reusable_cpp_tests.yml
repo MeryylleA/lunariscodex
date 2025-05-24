@@ -92,19 +92,39 @@ jobs:
           cat <<EOF > ./temp_text_cleaner_input/sample.txt
           <!DOCTYPE html>
           <html> <head><title>Test</title></head> <body>
+          <!-- This is a comment -->
           <p>Hello   World!  </p>
           Another line.
+          URL: http://example.com and email: test@example.com
+          Duplicate Line
+          Duplicate Line
+          </body> </html>
           EOF
+
           "$TEXT_CLEANER_EXEC" \
             --input ./temp_text_cleaner_input/sample.txt \
             --output ./temp_text_cleaner_output/cleaned.txt \
             --remove-html --normalize-whitespace --remove-empty-lines \
-            --to-lowercase
-          echo "test\nhello world!\nanother line." > expected_output.txt
+            --to-lowercase \
+            --process-urls --url-placeholder "[url]" \
+            --process-emails --email-placeholder "[email]" \
+            --remove-exact-duplicates
+
+          # CORREÇÃO AQUI para o expected_output.txt
+          cat <<EXPECTED_EOF > expected_output.txt
+          test
+          hello world!
+          another line.
+          url: [url] and email: [email]
+          duplicate line
+          EXPECTED_EOF
+
           if diff -u expected_output.txt ./temp_text_cleaner_output/cleaned.txt; then
-            echo "Text Cleaner test passed on ${{ matrix.os.display }}"
+            echo "✅ Text Cleaner test passed on ${{ matrix.os.display }}"
           else
-            echo "Text Cleaner test failed on ${{ matrix.os.display }}"; cat expected_output.txt; cat ./temp_text_cleaner_output/cleaned.txt; exit 1
+            echo "❌ Text Cleaner test failed on ${{ matrix.os.display }}"
+            echo "--- Expected ---"; cat expected_output.txt; echo "--- Actual ---"; cat ./temp_text_cleaner_output/cleaned.txt
+            exit 1
           fi
 
       - name: Run BPE Processor Tests
@@ -118,7 +138,7 @@ jobs:
           done
           TOKEN_OUTPUT=$("$BPE_EXEC" --action tokenize --model_path "./temp_bpe/model_output/bpe_model/" --input_text "hello test world" --verbose)
           if [ $? -ne 0 ] || [ -z "$TOKEN_OUTPUT" ]; then echo "ERROR: BPE tokenization failed. Output: $TOKEN_OUTPUT"; exit 1; fi
-          echo "BPE Processor test passed on ${{ matrix.os.display }}"
+          echo "✅ BPE Processor test passed on ${{ matrix.os.display }}"
 
       - name: Cleanup C++ Test Files
         if: always()
