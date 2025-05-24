@@ -1,0 +1,99 @@
+name: Reusable Python Tests
+
+on:
+  workflow_call:
+    inputs:
+      test_matrix_json:
+        description: 'JSON string of the OS matrix for tests'
+        required: true
+        type: string
+      python_version:
+        description: 'Python version to use'
+        required: true
+        type: string
+    secrets: # Define os segredos que este workflow reutilizável espera
+      CODECOV_TOKEN:
+        required: true # Ou false se for opcional
+      HF_TOKEN:
+        required: false # Assumindo que HF_TOKEN pode ser opcional ou não usado em todos os testes
+    outputs:
+      python_test_result:
+        description: "Result of the Python tests"
+        value: ${{ jobs.python_suite.result }}
+
+env:
+  PYTHONUTF8: "1" # Env vars específicas do Python podem vir aqui
+
+jobs:
+  python_suite:
+    name: Python Tests (${{ matrix.os.display }})
+    runs-on: ${{ matrix.os.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(inputs.test_matrix_json) }}
+    defaults:
+      run:
+        shell: bash
+    env: # Segredos são acessados via inputs.secrets no workflow reutilizável
+      HF_TOKEN: ${{ secrets.HF_TOKEN }} 
+      # CODECOV_TOKEN é usado diretamente pela action
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+      - name: Display Python Info
+        run: python --version; pip --version
+      - name: Cache Python Dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ matrix.os.runner }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ matrix.os.runner }}-pip-
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run Unit Tests
+        run: |
+          python -m pytest tests/ -k "test_model" \
+            --cov=model \
+            --cov-report=xml:coverage-${{ matrix.os.name }}.xml \
+            --cov-report=term-missing \
+            --tb=short
+      - name: Upload Coverage Report
+        if: success() && matrix.os.name == 'ubuntu-latest' 
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }} # Acessa o segredo passado
+          files: ./coverage-${{ matrix.os.name }}.xml
+          flags: model-tests-${{ matrix.os.name }}
+          name: codecov-ubuntu-latest-${{ inputs.python_version }} # Nome mais específico
+          fail_ci_if_error: true
+      - name: Create Test Datasets
+        run: |
+          mkdir -p ./temp_train_data ./temp_val_data
+          echo "def train_function_one(): return 'train1'" > ./temp_train_data/train_sample_1.py
+          echo "class TrainSampleClass:\n  value = 'train2'" > ./temp_train_data/train_sample_2.py
+          echo "def validation_function(): return 'validation_data_here'" > ./temp_val_data/val_sample_1.py
+      - name: Test Data Preparation
+        run: |
+          python prepare_data.py --data_source_type text_file_lines --dataset_name_or_path "./temp_train_data/*.py" --tokenizer_name_or_path gpt2 --output_path ./processed_data/train_data.memmap --max_length 32 --max_examples 2 --overwrite_output
+          python prepare_data.py --data_source_type text_file_lines --dataset_name_or_path "./temp_val_data/*.py" --tokenizer_name_or_path gpt2 --output_path ./processed_data/val_data.memmap --max_length 32 --max_examples 2 --overwrite_output
+      - name: Test Training Pipeline
+        run: |
+          python train.py --memmap_file_train ./processed_data/train_data.memmap --num_sequences_train 2 --memmap_file_val ./processed_data/val_data.memmap --num_sequences_val 2 --tokenizer_name_or_path gpt2 --dataset_max_length 32 --dataset_dtype int32 --model_max_seq_len 32 --d_model 32 --n_layers 1 --n_heads 1 --batch_size 1 --num_epochs 1 --device cpu --checkpoint_dir ./checkpoints --log_interval 1 --save_strategy epoch --lora_rank 0 --seed 42
+      - name: Test Inference Pipeline
+        run: |
+          CHECKPOINT_PATH="./checkpoints/best_model.pt"
+          if [ ! -f "$CHECKPOINT_PATH" ]; then ls -la ./checkpoints/; exit 1; fi
+          OUTPUT=$(python inference.py --checkpoint_path "$CHECKPOINT_PATH" --tokenizer_name_or_path gpt2 --prompt "Test prompt:" --max_new_tokens 5 --temperature 0.5 --device cpu --no_color)
+          if [ $? -ne 0 ] || [ -z "$OUTPUT" ]; then echo "Inference test failed"; exit 1; fi
+          echo "Generated output (first 100 chars): ${OUTPUT:0:100}..."
+      - name: Cleanup Python Test Files
+        if: always()
+        run: rm -rf ./temp_train_data ./temp_val_data ./processed_data ./checkpoints ./coverage-${{ matrix.os.name }}.xml
