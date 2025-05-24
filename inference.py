@@ -19,6 +19,7 @@ from rich.box import ROUNDED
 from rich.table import Table
 from rich.live import Live
 from rich.prompt import Prompt, Confirm
+from pygments.util import ClassNotFound # <-- ADICIONADO IMPORT
 
 # Project-specific imports
 from model import LunarisMind, LunarisCodexConfig  # Assuming model.py is in the same directory
@@ -68,13 +69,11 @@ def validate_checkpoint(checkpoint_path: str) -> bool:
         return False
 
     try:
-        # Quick validation without loading full checkpoint
         file_size = os.path.getsize(checkpoint_path) / (1024 * 1024)  # MB
         logger.info(f"Checkpoint file size: {file_size:.2f} MB")
 
-        if file_size < 1:  # Less than 1MB is suspicious
+        if file_size < 1:
             logger.warning("Checkpoint file seems very small, validation may fail")
-
         return True
     except Exception as e:
         logger.error(f"Error validating checkpoint: {e}")
@@ -112,16 +111,14 @@ def load_model_from_checkpoint(checkpoint_path: str, device: torch.device) -> tu
             logger.error(f"Failed to load checkpoint '{checkpoint_path}': {e}", exc_info=True)
             sys.exit(1)
 
-        # Validate checkpoint structure
         required_keys = ["config", "model_state_dict"]
-        missing_keys = [key for key in required_keys if key not in checkpoint]
-        if missing_keys:
-            logger.error(f"Checkpoint missing required keys: {missing_keys}")
+        missing_keys_list = [key for key in required_keys if key not in checkpoint]
+        if missing_keys_list: # Renomeado para evitar conflito com 'missing_keys' de load_state_dict
+            logger.error(f"Checkpoint missing required keys: {missing_keys_list}")
             sys.exit(1)
 
         progress.update(task, advance=20)
 
-        # Instantiate config from checkpoint
         try:
             model_config_dict = checkpoint["config"]
             required_config_fields = ["vocab_size", "d_model", "n_layers", "n_heads", "max_seq_len"]
@@ -147,38 +144,31 @@ def load_model_from_checkpoint(checkpoint_path: str, device: torch.device) -> tu
             logger.error(f"Unexpected error loading model configuration: {e}", exc_info=True)
             sys.exit(1)
 
-        # Instantiate model
         model = LunarisMind(model_config)
         progress.update(task, advance=20)
 
-        # Load model state dict with better error handling
         model_state_dict = checkpoint["model_state_dict"]
-
-        # Handle potential '_orig_mod.' prefix if checkpoint was saved from a compiled model
         is_compiled_checkpoint = any(k.startswith("_orig_mod.") for k in model_state_dict.keys())
         if is_compiled_checkpoint:
             logger.info("Checkpoint appears to be from a compiled model. Stripping '_orig_mod.' prefix.")
             model_state_dict = {k.replace('_orig_mod.', ''): v for k, v in model_state_dict.items()}
 
-        missing_keys, unexpected_keys = model.load_state_dict(model_state_dict, strict=False)
-        if missing_keys:
-            logger.warning(f"Missing keys when loading model state_dict: {missing_keys}")
-        if unexpected_keys:
-            logger.warning(f"Unexpected keys when loading model state_dict: {unexpected_keys}")
+        missing_keys_load, unexpected_keys_load = model.load_state_dict(model_state_dict, strict=False) # Renomeado
+        if missing_keys_load:
+            logger.warning(f"Missing keys when loading model state_dict: {missing_keys_load}")
+        if unexpected_keys_load:
+            logger.warning(f"Unexpected keys when loading model state_dict: {unexpected_keys_load}")
 
         model.to(device)
-        model.eval()  # Set model to evaluation mode
+        model.eval()
         progress.update(task, advance=10, description="[model]Model loaded![/model]")
 
-    # Calculate model parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    # Display enhanced model info
     info_table = Table(show_header=False, box=ROUNDED)
     info_table.add_column("Property", style="model")
     info_table.add_column("Value", style="success")
-
     info_table.add_row("Architecture", "Lunaris Mind")
     info_table.add_row("Layers", str(model_config.n_layers))
     info_table.add_row("Attention Heads", str(model_config.n_heads))
@@ -189,7 +179,6 @@ def load_model_from_checkpoint(checkpoint_path: str, device: torch.device) -> tu
     info_table.add_row("Trainable Parameters", f"{trainable_params:,}")
     info_table.add_row("Parameter Ratio", f"{trainable_params/total_params*100:.2f}%")
     info_table.add_row("Memory Usage", f"{get_memory_usage():.1f} MB")
-
     console.print(Panel(info_table, title="Model Information", border_style="green"))
 
     train_args_from_checkpoint = checkpoint.get("args", {})
@@ -200,25 +189,26 @@ def display_generation_params(params):
     param_table = Table(show_header=False, box=ROUNDED)
     param_table.add_column("Parameter", style="param")
     param_table.add_column("Value", style="success")
-
     for k, v in params.items():
         param_table.add_row(k, str(v))
-
     console.print(Panel(param_table, title="Generation Parameters", border_style="magenta"))
 
 def format_code_output(text: str, language: str = "python") -> Syntax:
     """Format code output with syntax highlighting"""
     try:
         return Syntax(text, language, theme="monokai", line_numbers=True)
-    except:
-        return Syntax(text, "text", theme="monokai")
+    except ClassNotFound: # <-- MUDANÇA AQUI
+        logger.warning(f"Syntax highlighting for language '{language}' not found. Falling back to 'text'.")
+        return Syntax(text, "text", theme="monokai", line_numbers=False)
+    except Exception as e: # <-- MUDANÇA AQUI
+        logger.warning(f"Error during syntax highlighting (lang: {language}): {e}. Falling back to 'text'.")
+        return Syntax(text, "text", theme="monokai", line_numbers=False)
 
 def stream_generation(model, tokenizer, input_ids, max_new_tokens, temperature, top_k, top_p, repetition_penalty, eos_token_id, device):
     """Stream generation token by token for real-time output"""
     model.eval()
     generated_ids = input_ids.clone()
     generated_text = ""
-
     start_time = time.time()
 
     with Live(console=console, refresh_per_second=10) as live:
@@ -230,7 +220,6 @@ def stream_generation(model, tokenizer, input_ids, max_new_tokens, temperature, 
             with torch.no_grad():
                 logits = model.forward(generated_ids, attention_mask=current_attention_mask)[:, -1, :]
 
-            # Apply generation parameters
             logits = logits / temperature
             logits = model._apply_repetition_penalty_optimized(logits, generated_ids, repetition_penalty)
 
@@ -251,15 +240,10 @@ def stream_generation(model, tokenizer, input_ids, max_new_tokens, temperature, 
 
             probs = torch.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
-
-            # Decode the new token
             new_token_text = tokenizer.decode(next_token[0], skip_special_tokens=True)
             generated_text += new_token_text
-
-            # Update display
             elapsed_time = time.time() - start_time
             tokens_per_sec = (i + 1) / elapsed_time if elapsed_time > 0 else 0
-
             status_text = f"[performance]Generating... Token {i+1}/{max_new_tokens} | {tokens_per_sec:.1f} tok/s[/performance]"
             output_panel = Panel(
                 Text(generated_text, style="generation"),
@@ -267,13 +251,9 @@ def stream_generation(model, tokenizer, input_ids, max_new_tokens, temperature, 
                 border_style="green"
             )
             live.update(output_panel)
-
             generated_ids = torch.cat((generated_ids, next_token), dim=-1)
-
-            # Check for EOS
             if eos_token_id is not None and next_token.item() == eos_token_id:
                 break
-
     return generated_ids, generated_text, tokens_per_sec
 
 def interactive_mode(model, tokenizer, device, config):
@@ -289,7 +269,6 @@ def interactive_mode(model, tokenizer, device, config):
         title="Interactive Mode",
         border_style="bright_magenta"
     ))
-
     conversation_history = ""
     generation_params = {
         "max_new_tokens": 100,
@@ -298,11 +277,9 @@ def interactive_mode(model, tokenizer, device, config):
         "top_p": getattr(config, 'top_p', 0.95),
         "repetition_penalty": getattr(config, 'repetition_penalty', 1.1)
     }
-
     while True:
         try:
             user_input = Prompt.ask("\n[interactive]You[/interactive]")
-
             if user_input.lower() in ['/quit', '/exit', '/q']:
                 console.print("[interactive]Goodbye![/interactive]")
                 break
@@ -324,15 +301,9 @@ def interactive_mode(model, tokenizer, device, config):
                     border_style="yellow"
                 ))
                 continue
-
-            # Build prompt with conversation history
             full_prompt = f"{conversation_history}USER: {user_input}\nASSISTANT:"
-
-            # Tokenize and generate
             input_ids = tokenizer.encode(full_prompt, return_tensors="pt").to(device)
-
             console.print(f"\n[interactive]Assistant[/interactive]:")
-
             start_time = time.time()
             with torch.no_grad():
                 generated_ids = model.generate(
@@ -344,89 +315,54 @@ def interactive_mode(model, tokenizer, device, config):
                     repetition_penalty=generation_params["repetition_penalty"],
                     eos_token_id=tokenizer.eos_token_id
                 )
-
-            # Decode response
             num_prompt_tokens = input_ids.shape[1]
             generated_ids_new = generated_ids[0, num_prompt_tokens:]
             response = tokenizer.decode(generated_ids_new, skip_special_tokens=True)
-
-            # Performance metrics
             generation_time = time.time() - start_time
             tokens_generated = len(generated_ids_new)
             tokens_per_sec = tokens_generated / generation_time if generation_time > 0 else 0
-
-            # Display response
             console.print(Panel(
                 Text(response, style="generation"),
                 title=f"[performance]{tokens_per_sec:.1f} tokens/sec[/performance]",
                 border_style="green"
             ))
-
-            # Update conversation history
             conversation_history += f"USER: {user_input}\nASSISTANT: {response}\n"
-
         except KeyboardInterrupt:
             console.print("\n[interactive]Interactive mode interrupted. Use /quit to exit properly.[/interactive]")
         except Exception as e:
-            logger.error(f"Error in interactive mode: {e}")
+            logger.error(f"Error in interactive mode: {e}", exc_info=True) # Adicionado exc_info=True para mais detalhes
 
 def main():
     parser = argparse.ArgumentParser(description=f"Generate text using a trained Lunaris Codex model (Enhanced v{SCRIPT_VERSION}).")
-
-    parser.add_argument("--checkpoint_path", type=str, required=True,
-                        help="Path to the model checkpoint (.pt file).")
-    parser.add_argument("--tokenizer_name_or_path", type=str, default=None,
-                        help="Tokenizer name or path (e.g., 'gpt2', 'bigcode/starcoder').")
-    parser.add_argument("--prompt", type=str, default="USER: Write a Python function to sort a list.\nASSISTANT:",
-                        help="Input prompt for the model.")
-    parser.add_argument("--prompt_file", type=str, default=None,
-                        help="Path to a file containing the prompt (alternative to --prompt).")
-    parser.add_argument("--max_new_tokens", type=int, default=100,
-                        help="Maximum number of new tokens to generate.")
-    parser.add_argument("--temperature", type=float, default=None,
-                        help="Sampling temperature. Overrides model config if set.")
-    parser.add_argument("--top_k", type=int, default=None,
-                        help="Top-k filtering. Overrides model config if set. 0 to disable.")
-    parser.add_argument("--top_p", type=float, default=None,
-                        help="Nucleus (top-p) filtering. Overrides model config if set. 1.0 to disable.")
-    parser.add_argument("--repetition_penalty", type=float, default=None,
-                        help="Repetition penalty. 1.0 means no penalty. Overrides model config if set.")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
-                        help="Device to use for inference (e.g., 'cuda', 'cpu').")
-    parser.add_argument("--seed", type=int, default=None,
-                        help="Random seed for generation (for reproducibility).")
-    parser.add_argument("--output_file", type=str, default=None,
-                        help="Save the generated text to a file.")
-    parser.add_argument("--no_color", action="store_true",
-                        help="Disable colored output.")
-    parser.add_argument("--interactive", action="store_true",
-                        help="Enable interactive chat mode.")
-    parser.add_argument("--stream", action="store_true",
-                        help="Enable streaming generation (real-time token output).")
-    parser.add_argument("--syntax_highlight", type=str, default="python",
-                        help="Language for syntax highlighting (python, javascript, etc.).")
-
+    parser.add_argument("--checkpoint_path", type=str, required=True, help="Path to the model checkpoint (.pt file).")
+    parser.add_argument("--tokenizer_name_or_path", type=str, default=None, help="Tokenizer name or path (e.g., 'gpt2', 'bigcode/starcoder').")
+    parser.add_argument("--prompt", type=str, default="USER: Write a Python function to sort a list.\nASSISTANT:", help="Input prompt for the model.")
+    parser.add_argument("--prompt_file", type=str, default=None, help="Path to a file containing the prompt (alternative to --prompt).")
+    parser.add_argument("--max_new_tokens", type=int, default=100, help="Maximum number of new tokens to generate.")
+    parser.add_argument("--temperature", type=float, default=None, help="Sampling temperature. Overrides model config if set.")
+    parser.add_argument("--top_k", type=int, default=None, help="Top-k filtering. Overrides model config if set. 0 to disable.")
+    parser.add_argument("--top_p", type=float, default=None, help="Nucleus (top-p) filtering. Overrides model config if set. 1.0 to disable.")
+    parser.add_argument("--repetition_penalty", type=float, default=None, help="Repetition penalty. 1.0 means no penalty. Overrides model config if set.")
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device to use for inference (e.g., 'cuda', 'cpu').")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for generation (for reproducibility).")
+    parser.add_argument("--output_file", type=str, default=None, help="Save the generated text to a file.")
+    parser.add_argument("--no_color", action="store_true", help="Disable colored output.")
+    parser.add_argument("--interactive", action="store_true", help="Enable interactive chat mode.")
+    parser.add_argument("--stream", action="store_true", help="Enable streaming generation (real-time token output).")
+    parser.add_argument("--syntax_highlight", type=str, default="python", help="Language for syntax highlighting (python, javascript, etc.).")
     args = parser.parse_args()
 
-    # Apply no color if requested
     if args.no_color:
         console.no_color = True
-
-    # Show fancy header
     show_header()
-
-    # Validate checkpoint before loading
     if not validate_checkpoint(args.checkpoint_path):
         sys.exit(1)
-
-    # Set seed for reproducibility if provided
     if args.seed is not None:
         torch.manual_seed(args.seed)
         if args.device == "cuda" and torch.cuda.is_available():
             torch.cuda.manual_seed_all(args.seed)
         logger.info(f"Random seed set to: {args.seed}")
 
-    # Determine device
     device = torch.device(args.device)
     if device.type == "cuda" and torch.cuda.is_available():
         gpu_name = torch.cuda.get_device_name(0)
@@ -435,10 +371,7 @@ def main():
     else:
         logger.info(f"Using device: [bold]{device}[/bold]")
 
-    # Load model
     model, model_config, train_args = load_model_from_checkpoint(args.checkpoint_path, device)
-
-    # Determine tokenizer path
     tokenizer_path = args.tokenizer_name_or_path
     if not tokenizer_path:
         tokenizer_path = train_args.get("tokenizer_name_or_path")
@@ -447,17 +380,15 @@ def main():
             sys.exit(1)
         logger.info(f"Using tokenizer from training arguments: [bold]{tokenizer_path}[/bold]")
 
-    # Load tokenizer
     with console.status("[model]Loading tokenizer...[/model]", spinner="dots"):
         try:
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
-            # Ensure pad token is set for tokenizer
             if tokenizer.pad_token_id is None:
                 if tokenizer.eos_token_id is not None:
                     tokenizer.pad_token_id = tokenizer.eos_token_id
                     tokenizer.pad_token = tokenizer.eos_token
                     logger.info(f"Set tokenizer pad_token_id to eos_token_id: {tokenizer.pad_token_id}")
-                else:  # Minimal fallback if no EOS
+                else:
                     tokenizer.add_special_tokens({'pad_token': '<|PAD|>'})
                     logger.warning(f"Tokenizer lacked pad/eos. Added new pad_token='<|PAD|>' (ID: {tokenizer.pad_token_id})")
             logger.info(f"Tokenizer loaded successfully: [bold]{tokenizer.__class__.__name__}[/bold]")
@@ -465,12 +396,10 @@ def main():
             logger.error(f"Failed to load tokenizer '{tokenizer_path}': {e}", exc_info=True)
             sys.exit(1)
 
-    # Interactive mode
     if args.interactive:
         interactive_mode(model, tokenizer, device, model_config)
         return
 
-    # Get prompt from file if specified
     prompt = args.prompt
     if args.prompt_file:
         try:
@@ -478,136 +407,88 @@ def main():
                 prompt = f.read()
             logger.info(f"Loaded prompt from file: [bold]{args.prompt_file}[/bold]")
         except Exception as e:
-            logger.error(f"Failed to load prompt from file '{args.prompt_file}': {e}")
+            logger.error(f"Failed to load prompt from file '{args.prompt_file}': {e}", exc_info=True) # Adicionado exc_info=True
             sys.exit(1)
 
-    # Prepare input
     input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
-
-    # Generation parameters
     gen_temp = args.temperature if args.temperature is not None else getattr(model_config, 'temperature', 0.7)
     gen_top_k = args.top_k if args.top_k is not None else getattr(model_config, 'top_k', 0)
     gen_top_p = args.top_p if args.top_p is not None else getattr(model_config, 'top_p', 0.9)
     gen_rep_penalty = args.repetition_penalty if args.repetition_penalty is not None else getattr(model_config, 'repetition_penalty', 1.0)
-
-    # EOS token ID for stopping generation
     eos_token_id_for_gen = tokenizer.eos_token_id
 
-    # Display generation parameters
     display_generation_params({
-        "Max new tokens": args.max_new_tokens,
-        "Temperature": gen_temp,
-        "Top-k": gen_top_k,
-        "Top-p": gen_top_p,
-        "Repetition penalty": gen_rep_penalty,
-        "EOS token ID": eos_token_id_for_gen
+        "Max new tokens": args.max_new_tokens, "Temperature": gen_temp, "Top-k": gen_top_k,
+        "Top-p": gen_top_p, "Repetition penalty": gen_rep_penalty, "EOS token ID": eos_token_id_for_gen
     })
-
-    # Display prompt
-    console.print(Panel(
-        Text(prompt, style="prompt"),
-        title="Input Prompt",
-        border_style="yellow",
-        box=ROUNDED
-    ))
-
-    # Generate text
+    console.print(Panel(Text(prompt, style="prompt"), title="Input Prompt", border_style="yellow", box=ROUNDED))
     logger.info("Starting text generation...")
 
     if args.stream:
-        # Streaming generation
         generated_ids_full, generated_text, tokens_per_sec = stream_generation(
-            model, tokenizer, input_ids, args.max_new_tokens,
-            gen_temp, gen_top_k, gen_top_p, gen_rep_penalty,
-            eos_token_id_for_gen, device
+            model, tokenizer, input_ids, args.max_new_tokens, gen_temp, gen_top_k,
+            gen_top_p, gen_rep_penalty, eos_token_id_for_gen, device
         )
-
-        # Final performance summary
         console.print(f"\n[performance]Generation completed at {tokens_per_sec:.1f} tokens/second[/performance]")
-
     else:
-        # Standard generation
         start_time = time.time()
         with console.status("[model]Generating text...[/model]", spinner="dots"):
-            with torch.no_grad():  # Ensure no gradients are calculated
+            with torch.no_grad():
                 generated_ids_full = model.generate(
-                    input_ids,
-                    max_new_tokens=args.max_new_tokens,
-                    temperature=gen_temp,
-                    top_k=gen_top_k,
-                    top_p=gen_top_p,
-                    repetition_penalty=gen_rep_penalty,
-                    eos_token_id=eos_token_id_for_gen
+                    input_ids, max_new_tokens=args.max_new_tokens, temperature=gen_temp, top_k=gen_top_k,
+                    top_p=gen_top_p, repetition_penalty=gen_rep_penalty, eos_token_id=eos_token_id_for_gen
                 )
-
-        # Calculate performance metrics
         generation_time = time.time() - start_time
         num_prompt_tokens = input_ids.shape[1]
         generated_ids_new_only = generated_ids_full[0, num_prompt_tokens:]
         tokens_generated = len(generated_ids_new_only)
         tokens_per_sec = tokens_generated / generation_time if generation_time > 0 else 0
-
-        # Decode generated text
         generated_text = tokenizer.decode(generated_ids_new_only, skip_special_tokens=True)
 
-        # Display generated text with syntax highlighting if requested
+        panel_title = f"Generated Text - [performance]{tokens_per_sec:.1f} tokens/sec[/performance]" # Definido uma vez
         if args.syntax_highlight and generated_text.strip():
             try:
-                highlighted_text = format_code_output(generated_text, args.syntax_highlight)
+                highlighted_text_object = format_code_output(generated_text, args.syntax_highlight) # format_code_output agora lida com seus erros
                 console.print(Panel(
-                    highlighted_text,
-                    title=f"Generated Text - [performance]{tokens_per_sec:.1f} tokens/sec[/performance]",
+                    highlighted_text_object,
+                    title=panel_title,
                     border_style="green",
                     box=ROUNDED
                 ))
-            except:
-                # Fallback to regular text if syntax highlighting fails
+            except Exception as e: # <-- MUDANÇA AQUI: Captura exceções ao tentar exibir/criar o Panel
+                logger.error(f"Error displaying generated text with highlighting: {e}. Displaying as plain text.", exc_info=True)
                 console.print(Panel(
-                    Text(generated_text, style="generation"),
-                    title=f"Generated Text - [performance]{tokens_per_sec:.1f} tokens/sec[/performance]",
+                    Text(generated_text, style="generation"), # Fallback para texto simples
+                    title=panel_title,
                     border_style="green",
                     box=ROUNDED
                 ))
         else:
             console.print(Panel(
                 Text(generated_text, style="generation"),
-                title=f"Generated Text - [performance]{tokens_per_sec:.1f} tokens/sec[/performance]",
+                title=panel_title,
                 border_style="green",
                 box=ROUNDED
             ))
 
-    # Save generated text to file if specified
     if args.output_file:
         try:
             output_path = Path(args.output_file)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-
             with open(output_path, 'w', encoding='utf-8') as f:
                 if args.output_file.endswith('.md'):
-                    # Save as markdown with metadata
-                    f.write(f"# Generated Text\n\n")
-                    f.write(f"**Prompt:** {prompt}\n\n")
-                    f.write(f"**Generated Response:**\n\n")
-                    f.write(f"```{args.syntax_highlight}\n{generated_text}\n```\n\n")
-                    f.write(f"**Generation Parameters:**\n")
-                    f.write(f"- Temperature: {gen_temp}\n")
-                    f.write(f"- Top-k: {gen_top_k}\n")
-                    f.write(f"- Top-p: {gen_top_p}\n")
-                    f.write(f"- Repetition penalty: {gen_rep_penalty}\n")
-                    f.write(f"- Performance: {tokens_per_sec:.1f} tokens/sec\n")
+                    f.write(f"# Generated Text\n\n**Prompt:** {prompt}\n\n**Generated Response:**\n\n")
+                    f.write(f"```{args.syntax_highlight}\n{generated_text}\n```\n\n**Generation Parameters:**\n")
+                    f.write(f"- Temperature: {gen_temp}\n- Top-k: {gen_top_k}\n- Top-p: {gen_top_p}\n")
+                    f.write(f"- Repetition penalty: {gen_rep_penalty}\n- Performance: {tokens_per_sec:.1f} tokens/sec\n")
                 else:
-                    # Save as plain text
                     f.write(prompt + generated_text)
-
             logger.info(f"[success]✓ Generated text saved to:[/success] [bold]{output_path}[/bold]")
         except Exception as e:
-            logger.error(f"Failed to save generated text to file '{args.output_file}': {e}")
+            logger.error(f"Failed to save generated text to file '{args.output_file}': {e}", exc_info=True) # Adicionado exc_info=True
 
-    # Final memory usage
     final_memory = get_memory_usage()
     console.print(f"\n[performance]Final memory usage: {final_memory:.1f} MB[/performance]")
-
-    # Show completion message
     console.print("\n[success]✓ Text generation completed[/success]\n")
 
 if __name__ == "__main__":
