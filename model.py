@@ -27,7 +27,7 @@ class LunarisCodexConfig:
         top_p=0.95,
         repetition_penalty=1.1,
         lora_rank=32,
-        use_flash_attention_if_available=False,  # Desabilitado por padrão devido ao ALiBi
+        use_flash_attention_if_available=False,  # Desabilitado por padrão devido ao ALiBi test
         layer_norm_epsilon=1e-6,  # Mais estável que 1e-5
         ff_multiplier=4,  # Aumentado de 3 para 4 (padrão moderno)
         alibi_implementation="optimized"
