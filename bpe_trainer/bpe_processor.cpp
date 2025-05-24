@@ -13,7 +13,7 @@
 #include <cctype>
 #include <cstdio>
 
-#include <nlohmann/json.hpp>
+#include "nlohmann/json.hpp"
 
 // Namespace aliases
 using json = nlohmann::json;
