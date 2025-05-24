@@ -35,9 +35,14 @@ on:
       - 'LICENSE'
       - 'docs/**'
 
+# Permissões para o GITHUB_TOKEN usado neste workflow
+permissions:
+  contents: read        # Necessário para actions/checkout
+  pull-requests: write # Necessário para gh pr comment
+
 env:
   CXXFLAGS_MODE: RELEASE
-  PYTHON_VERSION: '3.11' # Usado como referência, mas passado explicitamente para o workflow reutilizável
+  PYTHON_VERSION: '3.11'
   PYTHONUTF8: "1"
 
 jobs:
@@ -176,7 +181,7 @@ jobs:
     uses: ./.github/workflows/reusable_python_tests.yml
     with:
       test_matrix_json: ${{ needs.detect_changes.outputs.test_matrix }}
-      python_version: '3.11' # Passar o valor diretamente
+      python_version: '3.11'
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -200,7 +205,7 @@ jobs:
 
           if [[ "$SHOULD_RUN_CPP" == "true" && "$CPP_RESULT" != "success" ]]; then FINAL_CONCLUSION="FAILURE"; fi
           if [[ "$SHOULD_RUN_PYTHON" == "true" && "$PYTHON_RESULT" != "success" ]]; then FINAL_CONCLUSION="FAILURE"; fi
-          if [[ "$DOCS_ONLY" == "true" ]]; then FINAL_CONCLUSION="SUCCESS"; fi # Docs only é um sucesso
+          if [[ "$DOCS_ONLY" == "true" ]]; then FINAL_CONCLUSION="SUCCESS"; fi
           if [[ "$SHOULD_RUN_CPP" == "false" && "$SHOULD_RUN_PYTHON" == "false" && "$DOCS_ONLY" == "false" ]]; then FINAL_CONCLUSION="SUCCESS"; fi
 
           echo "final_conclusion=$FINAL_CONCLUSION" >> "$GITHUB_OUTPUT"
