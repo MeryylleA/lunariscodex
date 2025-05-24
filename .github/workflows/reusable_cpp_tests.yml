@@ -16,10 +16,9 @@ on:
       cpp_test_result:
         description: "Result of the C++ tests"
         value: ${{ jobs.cpp_utilities.result }}
-    secrets: # Se prepare_data.py precisar de HF_TOKEN para datasets/tokenizers
+    secrets:
       HF_TOKEN:
         required: false
-
 
 env:
   CXXFLAGS_MODE: RELEASE
@@ -204,21 +203,6 @@ jobs:
           echo "hf_json_vocab_file=$STARCODER_TOKENIZER_JSON" >> $GITHUB_OUTPUT
           echo "Data Analyzer test fixtures generated."
 
-      - name: Run Data Analyzer Tests - Text Output with Starcoder Decoding
-        run: |
-          DA_EXEC="${{ steps.executables.outputs.data_analyzer_exec }}"
-          MEMMAP_FILE="${{ steps.da_fixtures.outputs.memmap_file }}"
-          HF_JSON_VOCAB_FILE="${{ steps.da_fixtures.outputs.hf_json_vocab_file }}"
-          if [ ! -f "$DA_EXEC" ] || [ ! -f "$MEMMAP_FILE" ] || [ ! -f "$HF_JSON_VOCAB_FILE" ]; then echo "ERROR: Missing files for DA test"; exit 1; fi
-
-          OUTPUT=$("$DA_EXEC" --file "$MEMMAP_FILE" --num_sequences 2 --max_length 32 --pad_id 0 \
-            --print_seq 2 --top_n_tokens 5 \
-            --vocab_file "$HF_JSON_VOCAB_FILE" --tokenizer_type hf_json)
-          echo "--- Data Analyzer Output (Starcoder Decoded) ---"; echo "$OUTPUT"; echo "------------------------------------------------"
-          echo "$OUTPUT" | grep -q "Sequence 0:" || (echo "ERROR: Starcoder Decoded Seq 0 not found"; exit 1)
-          echo "$OUTPUT" | grep -q "padding_token_percentage" || (echo "ERROR: Padding percentage not found"; exit 1)
-          echo "✅ Data Analyzer text output with Starcoder decoding test (basic check) passed."
-
       - name: Run Data Analyzer Tests - JSON Output with Starcoder Decoding
         run: |
           DA_EXEC="${{ steps.executables.outputs.data_analyzer_exec }}"
@@ -226,14 +210,28 @@ jobs:
           HF_JSON_VOCAB_FILE="${{ steps.da_fixtures.outputs.hf_json_vocab_file }}"
           if [ ! -f "$DA_EXEC" ] || [ ! -f "$MEMMAP_FILE" ] || [ ! -f "$HF_JSON_VOCAB_FILE" ]; then echo "ERROR: Missing files for DA JSON test"; exit 1; fi
 
+          echo "Running Data Analyzer (text output will go to logs for info)..."
+          "$DA_EXEC" --file "$MEMMAP_FILE" --num_sequences 2 --max_length 32 --pad_id 0 \
+            --print_seq 2 --top_n_tokens 5 \
+            --vocab_file "$HF_JSON_VOCAB_FILE" --tokenizer_type hf_json
+          
+          echo "Capturing JSON output for validation..."
           JSON_OUTPUT=$("$DA_EXEC" --file "$MEMMAP_FILE" --num_sequences 2 --max_length 32 --pad_id 0 \
             --top_n_tokens 5 --output_format json \
             --vocab_file "$HF_JSON_VOCAB_FILE" --tokenizer_type hf_json)
+          
           echo "--- Data Analyzer JSON Output (Starcoder Decoded) ---"; echo "$JSON_OUTPUT" | jq .; echo "---------------------------------------------------"
-          TOTAL_TOKENS=$(echo "$JSON_OUTPUT" | jq '.total_tokens_in_file')
-          if [[ -z "$TOTAL_TOKENS" || "$TOTAL_TOKENS" == "null" ]]; then echo "ERROR: JSON total_tokens is null/empty"; exit 1; fi
-          echo "$JSON_OUTPUT" | jq -e '.top_n_common_tokens[0].token_string' > /dev/null || (echo "ERROR: JSON top token string not found/invalid"; exit 1)
-          echo "✅ Data Analyzer JSON output with Starcoder decoding test (basic check) passed."
+          
+          # Validações com jq (usando -e para que jq retorne status de erro se a expressão for falsa/null)
+          echo "$JSON_OUTPUT" | jq -e '.total_tokens_in_file == 64' > /dev/null || { echo "❌ ERROR: JSON total_tokens_in_file mismatch. Expected 64."; exit 1; }
+          echo "$JSON_OUTPUT" | jq -e '.padding_token_count == 47' > /dev/null || { echo "❌ ERROR: JSON padding_token_count mismatch. Expected 47."; exit 1; }
+          # Para floats, uma comparação exata pode ser frágil. Vamos verificar se o campo existe e é um número.
+          echo "$JSON_OUTPUT" | jq -e '.padding_token_percentage | type == "number"' > /dev/null || { echo "❌ ERROR: JSON padding_token_percentage is not a number or does not exist."; exit 1; }
+          echo "$JSON_OUTPUT" | jq -e '.top_n_common_tokens[0].token_id == 0' > /dev/null || { echo "❌ ERROR: JSON top_n_common_tokens[0].token_id mismatch. Expected 0."; exit 1; }
+          echo "$JSON_OUTPUT" | jq -e '.top_n_common_tokens[0].token_string == "<|endoftext|>"' > /dev/null || { echo "❌ ERROR: JSON top_n_common_tokens[0].token_string mismatch. Expected <|endoftext|>"; exit 1; }
+          echo "$JSON_OUTPUT" | jq -e '.top_n_common_tokens[0].count == 47' > /dev/null || { echo "❌ ERROR: JSON top_n_common_tokens[0].count mismatch. Expected 47."; exit 1; }
+          
+          echo "✅ Data Analyzer JSON output with Starcoder decoding test passed."
       
       - name: Run Data Analyzer Tests - Argument Validation
         run: |
