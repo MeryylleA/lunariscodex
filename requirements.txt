@@ -18,7 +18,6 @@
 # --- Core Deep Learning & ML Ecosystem ---
 torch>=2.1.0               # PyTorch 2.1+ recommended for latest features (e.g., F.scaled_dot_product_attention, improved torch.compile).
                            # Tested with up to 2.3.x.
-
 transformers>=4.35.0       # For AutoTokenizer, model utilities, etc. Newer versions often have better support.
 datasets>=2.14.0           # For load_dataset and robust dataset handling.
 
@@ -29,6 +28,7 @@ sentencepiece>=0.1.98      # Required by many tokenizers (e.g., Llama, StarCoder
                            # Version 0.2.0 has been tested successfully.
 safetensors>=0.4.0         # For secure and fast tensor serialization (used by Hugging Face, potentially for future model sharing).
                            # Note: Current training checkpoints use PyTorch's native .pt format.
+psutil>=5.9.0              # For memory usage monitoring in inference.
 
 # --- CLI Enhancement & User Experience ---
 rich>=13.0.0               # For beautiful and informative command-line interfaces (used in inference.py).
