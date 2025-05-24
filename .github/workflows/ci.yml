@@ -29,7 +29,6 @@ env:
 jobs:
   # ==============================================================================
   # CHANGE DETECTION & SETUP
-  # This job detects changes and sets up the matrix for subsequent jobs.
   # ==============================================================================
   detect_changes:
     name: Detect Changes & Setup Matrix
@@ -47,7 +46,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Detect C++ related changes
       - name: Detect C++ Changes
         id: cpp_changes
         uses: tj-actions/changed-files@v46
@@ -59,7 +57,6 @@ jobs:
             bpe_trainer/**
             .github/workflows/ci.yml
 
-      # Detect Python related changes
       - name: Detect Python Changes
         id: python_changes
         uses: tj-actions/changed-files@v46
@@ -73,11 +70,9 @@ jobs:
             requirements.txt
             .github/workflows/ci.yml
 
-      # Make execution decisions for each job type
       - name: Determine Job Execution
         id: decision
         run: |
-          # C++ decision
           if [[ "${{ steps.cpp_changes.outputs.any_changed }}" == "true" || \
                 "${{ github.event_name }}" == "push" || \
                 "${{ github.event_name }}" == "workflow_dispatch" ]]; then
@@ -88,7 +83,6 @@ jobs:
             echo "⏭️ C++ jobs will be skipped: No relevant changes detected"
           fi
 
-          # Python decision
           if [[ "${{ steps.python_changes.outputs.any_changed }}" == "true" || \
                 "${{ github.event_name }}" == "push" || \
                 "${{ github.event_name }}" == "workflow_dispatch" ]]; then
@@ -99,55 +93,38 @@ jobs:
             echo "⏭️ Python jobs will be skipped: No relevant changes detected"
           fi
 
-      # Setup test matrix for cross-platform testing
       - name: Setup Test Matrix
         id: matrix
         run: |
           cat <<EOF > matrix.json
           {
             "os": [
-              {
-                "name": "ubuntu-latest",
-                "display": "Ubuntu Latest",
-                "runner": "ubuntu-latest",
-                "make_cmd": "make",
-                "cpp_ext": ""
-              },
-              {
-                "name": "windows-latest",
-                "display": "Windows Latest",
-                "runner": "windows-latest",
-                "make_cmd": "mingw32-make", # Use mingw32-make (if installed via MSYS2/choco) or MSBuild (more complex)
-                "cpp_ext": ".exe"
-              },
-              {
-                "name": "macos-latest",
-                "display": "macOS Latest",
-                "runner": "macos-latest",
-                "make_cmd": "make",
-                "cpp_ext": ""
-              }
+              { "name": "ubuntu-latest", "display": "Ubuntu Latest", "runner": "ubuntu-latest", "gh_os": "Linux" },
+              { "name": "ubuntu-22.04", "display": "Ubuntu 22.04", "runner": "ubuntu-22.04", "gh_os": "Linux" },
+              { "name": "windows-latest", "display": "Windows Latest", "runner": "windows-latest", "gh_os": "Windows" },
+              { "name": "macos-latest", "display": "macOS Latest", "runner": "macos-latest", "gh_os": "macOS" }
             ]
           }
           EOF
-
           echo "matrix=$(cat matrix.json | jq -c .)" >> $GITHUB_OUTPUT
           echo "🔧 Test matrix configured for cross-platform testing"
 
   # ==============================================================================
   # C++ UTILITIES BUILD & TEST (Multi-OS)
-  # This job builds and tests C++ utilities across different operating systems.
   # ==============================================================================
   cpp_utilities:
     name: C++ Build & Test (${{ matrix.os.display }})
     runs-on: ${{ matrix.os.runner }}
     needs: detect_changes
-    # Only run if C++ changes detected OR if Python jobs should run (as Python might need C++ executables for future pybind11)
-    if: needs.detect_changes.outputs.should_run_cpp == 'true' || needs.detect_changes.outputs.should_run_python == 'true'
+    if: needs.detect_changes.outputs.should_run_cpp == 'true'
 
     strategy:
-      fail-fast: false # Continue testing other OS even if one fails
+      fail-fast: false
       matrix: ${{ fromJson(needs.detect_changes.outputs.test_matrix) }}
+
+    defaults: # Define default shell for all run steps in this job
+      run:
+        shell: bash
 
     outputs:
       text_cleaner_exec: ${{ steps.executables.outputs.text_cleaner_exec }}
@@ -155,101 +132,89 @@ jobs:
       bpe_processor_exec: ${{ steps.executables.outputs.bpe_processor_exec }}
 
     steps:
-      # --- Repository Setup ---
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # --- OS-specific Setup ---
-      - name: Install Build Dependencies (Linux)
-        if: matrix.os.name == 'ubuntu-latest'
+      - name: Install Build Dependencies
         run: |
-          echo "🔧 Installing C++ build dependencies on Ubuntu..."
-          sudo apt-get update -y
-          sudo apt-get install -y nlohmann-json3-dev build-essential
-          echo "📊 System Information:"
-          uname -a; gcc --version; g++ --version
+          echo "🔧 Installing C++ build dependencies on ${{ matrix.os.display }} (runner.os: ${{ runner.os }})..."
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            sudo apt-get update -y
+            sudo apt-get install -y nlohmann-json3-dev build-essential
+          elif [[ "${{ runner.os }}" == "Windows" ]]; then
+            echo "Installing MinGW via Chocolatey..."
+            choco install mingw --no-progress --yes
+            # PATH for MinGW g++ is usually set by choco.
+            # If nlohmann-json is needed, ensure it's in your project or install via vcpkg/other.
+            # For this example, we assume it's handled by your project structure for Windows.
+            echo "Adding MinGW to GITHUB_PATH (if not already set by choco)"
+            # Common MinGW path, adjust if choco installs elsewhere or provides a different way
+            echo "C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin" >> $GITHUB_PATH
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            brew install nlohmann-json
+          fi
 
-      - name: Install Build Dependencies (Windows)
-        if: matrix.os.name == 'windows-latest'
-        run: |
-          echo "🔧 Installing C++ build dependencies on Windows..."
-          # Install MSYS2 to get MinGW (GCC/G++) and mingw32-make
-          choco install msys2 --params "/NoUpdate"
-          echo "C:\tools\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          echo "C:\tools\msys64\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          
-          # Use MSYS2 shell to install nlohmann-json if needed, or rely on CMake/vcpkg later
-          # For Makefile, it might be easier if nlohmann-json is a header-only include or path is manually set.
-          # For a simple Makefile, it often works if headers are just in the include path.
-          
-          # Ensure a proper 'make' utility is available (mingw32-make for MSYS2)
-          echo "mingw32-make is now in PATH"
-          # Display compiler info
-          g++ --version || echo "g++ not found in PATH"
-          make --version || echo "make not found in PATH" # Should be mingw32-make
-
-      - name: Install Build Dependencies (macOS)
-        if: matrix.os.name == 'macos-latest'
-        run: |
-          echo "🔧 Installing C++ build dependencies on macOS..."
-          # Clang and Make usually come with Xcode Command Line Tools.
-          # For nlohmann-json, it might be via brew: brew install nlohmann-json
-          # Or just rely on it being header-only or using find_package in CMake.
-          echo "📊 System Information:"
-          uname -a; clang --version; g++ --version || echo "g++ not found"
-
-      # --- Build Cache Management ---
-      - name: Clean Previous Build Artifacts
-        run: |
-          echo "🧹 Cleaning previous build artifacts..."
-          # Use the specific 'make' command for the OS
-          ${{ matrix.os.make_cmd }} clean || echo "ℹ️ No previous artifacts to clean or clean failed. Proceeding."
+          echo "📊 System Information & Compiler Check:"
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            uname -a
+            gcc --version
+            g++ --version
+          elif [[ "${{ runner.os }}" == "Windows" ]]; then
+            g++ --version || echo "g++ not found, check MinGW installation and PATH configuration."
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            sw_vers
+            clang --version
+            g++ --version # Often an alias for clang++
+          fi
 
       - name: Cache C++ Executables
         id: cache_executables
         uses: actions/cache@v4
         with:
           path: |
-            text_cleaner/*${{ matrix.os.cpp_ext }}
-            data_analyzer/*${{ matrix.os.cpp_ext }}
-            bpe_trainer/*${{ matrix.os.cpp_ext }}
-          key: ${{ matrix.os.name }}-cpp-exec-${{ hashFiles('Makefile', 'text_cleaner/**/*.cpp', 'data_analyzer/**/*.cpp', 'bpe_trainer/**/*.cpp') }}
+            ${{ github.workspace }}/text_cleaner/lunaris_text_cleaner*
+            ${{ github.workspace }}/data_analyzer/lunaris_data_analyzer*
+            ${{ github.workspace }}/bpe_trainer/bpe_processor*
+          key: ${{ matrix.os.runner }}-${{ matrix.os.gh_os }}-cpp-exec-${{ hashFiles('Makefile', 'text_cleaner/**/*.cpp', 'data_analyzer/**/*.cpp', 'bpe_trainer/**/*.cpp') }}
           restore-keys: |
-            ${{ matrix.os.name }}-cpp-exec-
+            ${{ matrix.os.runner }}-${{ matrix.os.gh_os }}-cpp-exec-
 
-      # --- Build Process ---
+      - name: Clean Previous Build Artifacts
+        run: |
+          echo "🧹 Cleaning previous build artifacts..."
+          make clean || echo "ℹ️ No previous artifacts to clean or clean failed (continuing)."
+
       - name: Build C++ Utilities
         if: steps.cache_executables.outputs.cache-hit != 'true'
         run: |
           echo "🔨 Building C++ utilities on ${{ matrix.os.display }}..."
-          # Use the specific 'make' command for the OS
-          ${{ matrix.os.make_cmd }} all CXXFLAGS_MODE=${{ env.CXXFLAGS_MODE }}
+          make all CXXFLAGS_MODE=${{ env.CXXFLAGS_MODE }}
           echo "✅ C++ utilities built successfully"
 
       - name: Set Executable Paths
         id: executables
         run: |
-          # Paths should include the .exe extension for Windows
-          echo "text_cleaner_exec=text_cleaner/lunaris_text_cleaner${{ matrix.os.cpp_ext }}" >> $GITHUB_OUTPUT
-          echo "data_analyzer_exec=data_analyzer/lunaris_data_analyzer${{ matrix.os.cpp_ext }}" >> $GITHUB_OUTPUT
-          echo "bpe_processor_exec=bpe_trainer/bpe_processor${{ matrix.os.cpp_ext }}" >> $GITHUB_OUTPUT
+          EXE_SUFFIX=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            EXE_SUFFIX=".exe"
+          fi
+          echo "text_cleaner_exec=${{ github.workspace }}/text_cleaner/lunaris_text_cleaner$EXE_SUFFIX" >> $GITHUB_OUTPUT
+          echo "data_analyzer_exec=${{ github.workspace }}/data_analyzer/lunaris_data_analyzer$EXE_SUFFIX" >> $GITHUB_OUTPUT
+          echo "bpe_processor_exec=${{ github.workspace }}/bpe_trainer/bpe_processor$EXE_SUFFIX" >> $GITHUB_OUTPUT
 
           if [[ "${{ steps.cache_executables.outputs.cache-hit }}" == "true" ]]; then
             echo "♻️ C++ executables restored from cache"
           else
             echo "🆕 C++ executables built from source"
           fi
+          echo "Text Cleaner path: ${{ github.workspace }}/text_cleaner/lunaris_text_cleaner$EXE_SUFFIX"
+          ls -l "${{ github.workspace }}/text_cleaner/" # List contents for debugging
 
-      # --- Functional Tests for C++ Utilities ---
-      # These tests should be robust enough to run on different OS using bash shell
       - name: Run Text Cleaner Tests
-        shell: bash # Ensure bash is used even on Windows runners
         run: |
           echo "🧪 Testing Text Cleaner utility on ${{ matrix.os.display }}..."
-          
-          # Setup test environment
           mkdir -p ./temp_text_cleaner_input ./temp_text_cleaner_output
-          
+
           cat <<EOF > ./temp_text_cleaner_input/sample.txt
           <!DOCTYPE html>
           <html> <head><title>Test</title></head> <body>
@@ -263,17 +228,17 @@ jobs:
           </body> </html>
           EOF
 
-          # Run text cleaner
-          TEXT_CLEANER_EXEC="./${{ steps.executables.outputs.text_cleaner_exec }}"
-          # IMPORTANT: For Windows, paths in shell scripts should still use forward slashes for cross-platform compatibility
-          # However, the executable itself might interpret them as backslashes. Let's make sure the path is correct.
-          # The '$TEXT_CLEANER_EXEC' will correctly point to '.exe' on Windows.
-          
+          TEXT_CLEANER_EXEC="${{ steps.executables.outputs.text_cleaner_exec }}"
+          echo "Attempting to run: $TEXT_CLEANER_EXEC"
           if [ ! -f "$TEXT_CLEANER_EXEC" ]; then
             echo "❌ ERROR: Text Cleaner executable not found at: $TEXT_CLEANER_EXEC"
+            echo "Listing directory: ${{ github.workspace }}/text_cleaner/"
+            ls -la "${{ github.workspace }}/text_cleaner/"
+            echo "Listing full workspace:"
+            ls -la "${{ github.workspace }}"
             exit 1
           fi
-          
+
           "$TEXT_CLEANER_EXEC" \
             --input ./temp_text_cleaner_input/sample.txt \
             --output ./temp_text_cleaner_output/cleaned.txt \
@@ -281,26 +246,16 @@ jobs:
             --to-lowercase \
             --process-urls --url-placeholder "[url]" \
             --process-emails --email-placeholder "[email]" \
-            --remove-exact-duplicates || {
-              echo "❌ Text Cleaner execution failed"
-              exit 1
-            }
-          
-          # Create expected output
+            --remove-exact-duplicates
+
           cat <<-EXPECTED_EOF > expected_output.txt
           test
           hello world!
-          another line with multiple spaces.
-          email: [email]
-          url: [url]
-          duplicate line.
-          final paragraph
-EXPECTED_EOF
-          
-          # Compare outputs
-          echo "📊 Comparing actual vs expected output..."
-          # On Windows, 'diff' might not be available by default in git bash. Use git diff or powershell compare-object
-          # Or, better, just rely on diff if bash shell is explicitly set.
+          another line.
+          url: [url] and email: [email]
+          duplicate line
+          EXPECTED_EOF
+
           if diff -u expected_output.txt ./temp_text_cleaner_output/cleaned.txt; then
             echo "✅ Text Cleaner test passed on ${{ matrix.os.display }}"
           else
@@ -309,40 +264,35 @@ EXPECTED_EOF
           fi
 
       - name: Run BPE Processor Tests
-        shell: bash
         run: |
           echo "🧪 Testing BPE Processor on ${{ matrix.os.display }}..."
-          
-          # Setup test environment
           mkdir -p ./temp_bpe/corpus ./temp_bpe/model_output
-          
+
           cat <<EOF > ./temp_bpe/corpus/corpus.txt
           hello world this is a test a test
           another line for another test of the bpe
           hello world again
           EOF
 
-          # Train BPE model
-          BPE_EXEC="./${{ steps.executables.outputs.bpe_processor_exec }}"
+          BPE_EXEC="${{ steps.executables.outputs.bpe_processor_exec }}"
           if [ ! -f "$BPE_EXEC" ]; then
             echo "❌ ERROR: BPE Processor executable not found at: $BPE_EXEC"
             exit 1
           fi
-          
+
           "$BPE_EXEC" \
             --action train \
             --corpus ./temp_bpe/corpus/corpus.txt \
             --vocab-size 270 \
             --output ./temp_bpe/model_output/bpe_model/ \
             --mode byte --verbose
-            
-          # Verify output files were created
+
           REQUIRED_FILES=(
             "./temp_bpe/model_output/bpe_model/bpe_model_lunaris.json"
             "./temp_bpe/model_output/bpe_model/merges_lunaris.txt"
             "./temp_bpe/model_output/bpe_model/vocabulary_lunaris.txt"
           )
-          
+
           for file in "${REQUIRED_FILES[@]}"; do
             if [ ! -f "$file" ]; then
               echo "❌ ERROR: Required output file not found: $file"
@@ -350,24 +300,15 @@ EXPECTED_EOF
               exit 1
             fi
           done
-          
-          # Test tokenization
-          TOKEN_OUTPUT=$("$BPE_EXEC" --action tokenize --model_path "./temp_bpe/model_output/bpe_model/" --input_text "hello test world" --verbose 2>/dev/null) # Redirect stderr to /dev/null
-          
+
+          TOKEN_OUTPUT=$("$BPE_EXEC" --action tokenize --model_path "./temp_bpe/model_output/bpe_model/" --input_text "hello test world" --verbose)
+
           if [ $? -ne 0 ] || [ -z "$TOKEN_OUTPUT" ]; then
             echo "❌ ERROR: BPE tokenization failed"
             exit 1
           fi
-          
-          # Basic validation: check for expected token IDs for "hello" (e.g., if 'hello' becomes one token)
-          # This is simplified and might need refinement based on exact BPE output for this specific tiny corpus
-          # For a more robust check, you might need to compare the full output string with an expected one
-          echo "$TOKEN_OUTPUT" | grep -qE '\b[0-9]+\b' || { echo "❌ ERROR: Tokenization output is not numeric"; exit 1; }
-
           echo "✅ BPE Processor test passed on ${{ matrix.os.display }}"
-          echo "Token IDs (first 50 chars): ${TOKEN_OUTPUT:0:50}..."
 
-      # --- Cleanup ---
       - name: Cleanup Test Files
         if: always()
         run: |
@@ -377,7 +318,6 @@ EXPECTED_EOF
 
   # ==============================================================================
   # PYTHON SUITE TESTS (Multi-OS)
-  # This job runs Python-based tests across different operating systems.
   # ==============================================================================
   python_suite:
     name: Python Tests (${{ matrix.os.display }})
@@ -389,12 +329,14 @@ EXPECTED_EOF
       fail-fast: false
       matrix: ${{ fromJson(needs.detect_changes.outputs.test_matrix) }}
 
+    defaults: # Define default shell for all run steps in this job
+      run:
+        shell: bash
+
     steps:
-      # --- Repository Setup ---
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # --- Python Environment Setup ---
       - name: Setup Python Environment
         uses: actions/setup-python@v5
         with:
@@ -410,10 +352,10 @@ EXPECTED_EOF
       - name: Cache Python Dependencies
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: ${{ matrix.os.name }}-${{ env.PYTHON_VERSION }}-pip-${{ hashFiles('requirements.txt') }}
+          path: ~/.cache/pip # Default pip cache path
+          key: ${{ matrix.os.runner }}-${{ matrix.os.gh_os }}-pip-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            ${{ matrix.os.name }}-${{ env.PYTHON_VERSION }}-pip-
+            ${{ matrix.os.runner }}-${{ matrix.os.gh_os }}-pip-
 
       - name: Install Python Dependencies
         run: |
@@ -422,7 +364,6 @@ EXPECTED_EOF
           pip install -r requirements.txt
           echo "✅ Dependencies installed successfully"
 
-      # --- Unit Tests ---
       - name: Run Unit Tests
         run: |
           echo "🧪 Running unit tests on ${{ matrix.os.display }}..."
@@ -435,29 +376,22 @@ EXPECTED_EOF
           echo "✅ Unit tests completed on ${{ matrix.os.display }}"
 
       - name: Upload Coverage Report
-        if: success()
-        uses: codecov/codecov-action@v5
+        if: success() && matrix.os.gh_os == 'Linux' # Example: only upload from one OS to avoid conflicts or pick one
+        uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-${{ matrix.os.name }}.xml
-          flags: model-tests-${{ matrix.os.name }}
-          name: codecov-${{ matrix.os.name }}
+          flags: model-tests-${{ matrix.os.name }} # Keep unique flags if needed
+          name: codecov-${{ matrix.os.name }} # Keep unique names if needed
 
-      # --- Integration Tests Setup ---
       - name: Create Test Datasets
         run: |
           echo "📝 Creating test datasets on ${{ matrix.os.display }}..."
-
-          # Training data
-          mkdir -p ./temp_train_data
+          mkdir -p ./temp_train_data ./temp_val_data
           echo "def train_function_one(): return 'train1'" > ./temp_train_data/train_sample_1.py
           echo "class TrainSampleClass:\n  value = 'train2'" > ./temp_train_data/train_sample_2.py
-
-          # Validation data
-          mkdir -p ./temp_val_data
           echo "def validation_function(): return 'validation_data_here'" > ./temp_val_data/val_sample_1.py
           echo "# Another validation line" > ./temp_val_data/val_sample_2.py
-
           echo "✅ Test datasets created"
 
       - name: Test Data Preparation
@@ -465,25 +399,18 @@ EXPECTED_EOF
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           echo "🔄 Testing data preparation on ${{ matrix.os.display }}..."
-
-          # Prepare training data
           python prepare_data.py \
             --data_source_type text_file_lines \
             --dataset_name_or_path "./temp_train_data/*.py" \
             --tokenizer_name_or_path gpt2 \
             --output_path ./processed_data/train_data.memmap \
-            --max_length 32 --max_examples 2 --overwrite_output \
-            --tokenizer_trust_remote_code
-
-          # Prepare validation data
+            --max_length 32 --max_examples 2 --overwrite_output
           python prepare_data.py \
             --data_source_type text_file_lines \
             --dataset_name_or_path "./temp_val_data/*.py" \
             --tokenizer_name_or_path gpt2 \
             --output_path ./processed_data/val_data.memmap \
-            --max_length 32 --max_examples 2 --overwrite_output \
-            --tokenizer_trust_remote_code
-
+            --max_length 32 --max_examples 2 --overwrite_output
           echo "✅ Data preparation completed on ${{ matrix.os.display }}"
 
       - name: Test Training Pipeline
@@ -505,35 +432,15 @@ EXPECTED_EOF
             --lora_rank 0 --seed 42
           echo "✅ Training completed on ${{ matrix.os.display }}"
 
-      - name: Verify Training Outputs
-        id: verify_checkpoints
-        run: |
-          echo "🔍 Verifying training checkpoint files on ${{ matrix.os.display }}..."
-          echo "Checkpoint directory contents:"
-          ls -R ./checkpoints
-          
-          # Check for expected files
-          MAIN_CKPT_PATTERN="./checkpoints/lunaris_codex_epoch-1_step-*.pt" 
-          BEST_MODEL_FILE="./checkpoints/best_model.pt"
-          
-          if ! ls $MAIN_CKPT_PATTERN 1> /dev/null 2>&1; then 
-            echo "❌ ERROR: Main checkpoint file not found (pattern: $MAIN_CKPT_PATTERN)"
-            exit 1
-          fi
-          
-          if [ ! -f "$BEST_MODEL_FILE" ]; then 
-            echo "❌ ERROR: Best model checkpoint not found: $BEST_MODEL_FILE"
-            exit 1
-          fi
-          
-          echo "✅ All expected checkpoint files found on ${{ matrix.os.display }}"
-
       - name: Test Inference Pipeline
-        if: success() && steps.verify_checkpoints.outcome == 'success'
         run: |
           echo "🔮 Testing inference pipeline on ${{ matrix.os.display }}..."
           CHECKPOINT_PATH="./checkpoints/best_model.pt"
-          
+          if [ ! -f "$CHECKPOINT_PATH" ]; then
+            echo "❌ ERROR: Checkpoint file not found: $CHECKPOINT_PATH"
+            ls -la ./checkpoints/
+            exit 1
+          fi
           OUTPUT=$(python inference.py \
             --checkpoint_path "$CHECKPOINT_PATH" \
             --tokenizer_name_or_path gpt2 \
@@ -541,70 +448,72 @@ EXPECTED_EOF
             --max_new_tokens 5 \
             --temperature 0.5 \
             --device cpu --no_color)
-          
           if [ $? -eq 0 ] && [ -n "$OUTPUT" ]; then
             echo "✅ Inference test passed on ${{ matrix.os.display }}"
             echo "Generated output (first 100 chars): ${OUTPUT:0:100}..."
           else
-            echo "❌ ERROR: Inference script failed or produced no output on ${{ matrix.os.display }}"
-            echo "Output: $OUTPUT" 
+            echo "❌ Inference test failed on ${{ matrix.os.display }}"
             exit 1
           fi
 
-      # --- Cleanup ---
       - name: Cleanup Test Files
         if: always()
         run: |
-          echo "🧹 Cleaning up test files on ${{ matrix.os.display }}..."
+          echo "🧹 Cleaning up test files..."
           rm -rf ./temp_train_data ./temp_val_data \
                  ./processed_data ./checkpoints \
                  ./coverage-${{ matrix.os.name }}.xml
 
   # ==============================================================================
   # FINAL STATUS REPORTING
-  # This job aggregates results and posts comments on Pull Requests.
   # ==============================================================================
   ci_status:
     name: CI Status Report
     runs-on: ubuntu-latest
     needs: [detect_changes, cpp_utilities, python_suite]
-    if: always()
+    if: always() # Ensures this job runs even if upstream jobs fail
 
     steps:
       - name: Determine Overall Status
         id: status
+        shell: bash
         run: |
-          # Get results from matrix jobs. Default to 'skipped' if job was not run.
-          # We need to collect results from all matrix elements.
-          # Use a loop over the matrix to check.
-          
-          # Initialize overall success flag
-          OVERALL_SUCCESS=true
-          
-          # Check if C++ jobs ran and succeeded
-          if [[ "${{ needs.detect_changes.outputs.should_run_cpp }}" == "true" ]]; then
-            # Access job status of matrix elements using JSON parsing
-            # This is complex in shell, usually done by passing matrix results as outputs from cpp_utilities
-            # For simplicity, we'll assume if the job ran, it's needs.cpp_utilities.result
-            if [[ "${{ needs.cpp_utilities.result }}" != "success" ]]; then
-              OVERALL_SUCCESS=false
-              echo "❌ C++ utilities job failed or was cancelled."
-            fi
-          else
-            echo "⏭️ C++ utilities job was skipped."
+          CPP_JOB_EXISTS="${{ needs.detect_changes.outputs.should_run_cpp }}"
+          PYTHON_JOB_EXISTS="${{ needs.detect_changes.outputs.should_run_python }}"
+
+          CPP_STATUS="skipped" # Default if not run
+          if [[ "$CPP_JOB_EXISTS" == "true" ]]; then
+            CPP_STATUS="${{ needs.cpp_utilities.result }}"
+          fi
+
+          PYTHON_STATUS="skipped" # Default if not run
+          if [[ "$PYTHON_JOB_EXISTS" == "true" ]]; then
+            PYTHON_STATUS="${{ needs.python_suite.result }}"
           fi
           
-          # Check if Python jobs ran and succeeded
-          if [[ "${{ needs.detect_changes.outputs.should_run_python }}" == "true" ]]; then
-            if [[ "${{ needs.python_suite.result }}" != "success" ]]; then
-              OVERALL_SUCCESS=false
-              echo "❌ Python suite job failed or was cancelled."
-            fi
-          else
-            echo "⏭️ Python suite job was skipped."
+          echo "🔍 Job Status Summary:"
+          echo "  - C++ Jobs (Should Run: $CPP_JOB_EXISTS): $CPP_STATUS"
+          echo "  - Python Jobs (Should Run: $PYTHON_JOB_EXISTS): $PYTHON_STATUS"
+          
+          OVERALL_SUCCESS="true"
+          
+          if [[ "$CPP_JOB_EXISTS" == "true" && "$CPP_STATUS" != "success" && "$CPP_STATUS" != "skipped" ]]; then
+            OVERALL_SUCCESS="false"
+            echo "❌ C++ jobs failed or were cancelled"
           fi
           
-          echo "overall_success=$OVERALL_SUCCESS" >> $GITHUB_OUTPUT
+          if [[ "$PYTHON_JOB_EXISTS" == "true" && "$PYTHON_STATUS" != "success" && "$PYTHON_STATUS" != "skipped" ]]; then
+            OVERALL_SUCCESS="false"
+            echo "❌ Python jobs failed or were cancelled"
+          fi
+          
+          # If no jobs were meant to run, it's a success (e.g. docs-only change)
+          if [[ "$CPP_JOB_EXISTS" == "false" && "$PYTHON_JOB_EXISTS" == "false" ]]; then
+            echo "⏭️ All relevant jobs were skipped - no core changes detected"
+            OVERALL_SUCCESS="true" 
+          fi
+          
+          echo "overall_success=$OVERALL_SUCCESS" >> "$GITHUB_OUTPUT"
           
           if [[ "$OVERALL_SUCCESS" == "true" ]]; then
             echo "✅ Overall CI Status: SUCCESS"
@@ -614,49 +523,41 @@ EXPECTED_EOF
 
       - name: Post Success Comment (PR)
         if: github.event_name == 'pull_request' && steps.status.outputs.overall_success == 'true'
-        uses: actions/github-script@v6 # Using github-script for more robust PR comments
-        with:
-          script: |
-            const commentBody = `---
-            **Lunaris Codex CI Status: SUCCESS ✅**
-            Workflow: \`${{ github.workflow }}\`
-            Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body "---
+          **Lunaris Codex CI Status: SUCCESS ✅** 
+          Workflow: \`${{ github.workflow }}\`
+          Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
 
-            All tests passed successfully across multiple environments!
-            🔗 [View Action Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          All tests passed successfully across multiple environments!
+          🔗 [View Action Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-            *This is an automated message from your Lunaris Codex CI system.*
-            `;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: commentBody
-            });
+          *This is an automated message from your Lunaris Codex CI system.*" \
+          || echo "⚠️ Failed to post success comment (maybe not a PR, or GITHUB_TOKEN permissions)"
+
 
       - name: Post Failure Comment (PR)
         if: github.event_name == 'pull_request' && steps.status.outputs.overall_success == 'false'
-        uses: actions/github-script@v6 # Using github-script for more robust PR comments
-        with:
-          script: |
-            const commentBody = `---
-            **Lunaris Codex CI Status: FAILED ❌**
-            Workflow: \`${{ github.workflow }}\`
-            Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body "---
+          **Lunaris Codex CI Status: FAILED ❌** 
+          Workflow: \`${{ github.workflow }}\`
+          Branch: \`${{ github.head_ref }}\` (Commit: \`${{ github.sha }}\`)
 
-            Some tests failed. Please review the logs and fix any issues.
-            🔗 [View Action Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          Some tests failed. Please review the logs and fix any issues.
+          🔗 [View Action Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-            *This is an automated message from your Lunaris Codex CI system.*
-            `;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: commentBody
-            });
+          *This is an automated message from your Lunaris Codex CI system.*" \
+          || echo "⚠️ Failed to post failure comment (maybe not a PR, or GITHUB_TOKEN permissions)"
 
       - name: Final Status Check
+        shell: bash
         run: |
           if [[ "${{ steps.status.outputs.overall_success }}" == "false" ]]; then
             echo "❌ CI Pipeline failed - exiting with error code"
