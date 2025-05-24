@@ -1,6 +1,7 @@
 # .github/workflows/ci.yml
 name: Lunaris Codex CI
 
+# ... (on, env, jobs.detect_changes - tudo igual) ...
 on:
   push:
     branches: [ main ]
@@ -105,7 +106,6 @@ jobs:
           }
           EOF
           echo "matrix=$(cat matrix.json | jq -c .)" >> $GITHUB_OUTPUT
-
   cpp_utilities:
     name: C++ Build & Test (${{ matrix.os.display }})
     runs-on: ${{ matrix.os.runner }}
@@ -118,6 +118,7 @@ jobs:
       run:
         shell: bash
     outputs:
+      # ***** MUDANÇA AQUI *****
       text_cleaner_exec_path: ${{ steps.executables.outputs.text_cleaner_exec }}
       data_analyzer_exec_path: ${{ steps.executables.outputs.data_analyzer_exec }}
       bpe_processor_exec_path: ${{ steps.executables.outputs.bpe_processor_exec }}
@@ -140,23 +141,23 @@ jobs:
             ${{ github.workspace }}/text_cleaner/lunaris_text_cleaner
             ${{ github.workspace }}/data_analyzer/lunaris_data_analyzer
             ${{ github.workspace }}/bpe_trainer/bpe_processor
-          # Chave mais específica para o cache, incluindo hashes de arquivos fonte e Makefile
           key: ${{ matrix.os.runner }}-cpp-exec-v1-${{ hashFiles('Makefile', 'text_cleaner/**/*.cpp', 'text_cleaner/**/*.hpp', 'data_analyzer/**/*.cpp', 'data_analyzer/**/*.hpp', 'bpe_trainer/**/*.cpp', 'bpe_trainer/**/*.hpp') }}
           restore-keys: |
             ${{ matrix.os.runner }}-cpp-exec-v1-
 
-      - name: Clean Previous Build Artifacts
-        # Roda mesmo se o cache for restaurado, para garantir um ambiente limpo para o build (se necessário)
-        # Mas o build só roda se não houver cache hit.
+      - name: Clean Previous Build Artifacts (if no cache hit)
+        if: steps.cache_executables.outputs.cache-hit != 'true'
         run: |
+          echo "🧹 Cleaning previous build artifacts (cache miss)..."
           make clean || echo "ℹ️ Clean failed or no artifacts to clean."
 
-      - name: Build C++ Utilities
+      - name: Build C++ Utilities (if no cache hit)
         if: steps.cache_executables.outputs.cache-hit != 'true'
         run: |
           echo "🔨 Building C++ utilities (cache miss)..."
           make all CXXFLAGS_MODE=${{ env.CXXFLAGS_MODE }}
           echo "✅ C++ utilities built successfully."
+      
       - name: List files after potential build/cache restore
         run: |
           echo "📂 Listing workspace after build/cache restore:"
@@ -175,6 +176,7 @@ jobs:
           DA_EXEC="${{ github.workspace }}/data_analyzer/lunaris_data_analyzer"
           BPE_EXEC="${{ github.workspace }}/bpe_trainer/bpe_processor"
 
+          # Nomes das saídas devem ser consistentes com o que é usado depois
           echo "text_cleaner_exec=$TC_EXEC" >> $GITHUB_OUTPUT
           echo "data_analyzer_exec=$DA_EXEC" >> $GITHUB_OUTPUT
           echo "bpe_processor_exec=$BPE_EXEC" >> $GITHUB_OUTPUT
@@ -185,7 +187,6 @@ jobs:
             echo "🆕 No cache hit / executables built from source. Verifying built executables..."
           fi
 
-          # Verificar se os arquivos existem e são executáveis
           all_execs_found=true
           for exec_file in "$TC_EXEC" "$DA_EXEC" "$BPE_EXEC"; do
             if [ ! -f "$exec_file" ]; then
@@ -193,7 +194,7 @@ jobs:
               all_execs_found=false
             elif [ ! -x "$exec_file" ]; then
               echo "❌ ERROR: File found but not executable: $exec_file"
-              ls -l "$exec_file" # Mostra permissões
+              ls -l "$exec_file"
               all_execs_found=false
             else
               echo "✅ Found executable: $exec_file"
@@ -214,15 +215,12 @@ jobs:
           fi
           echo "All executables verified successfully."
 
-    # --- Test Steps (iguais aos anteriores, usando os outputs de 'executables') ---
       - name: Run Text Cleaner Tests
         run: |
           echo "🧪 Testing Text Cleaner utility on ${{ matrix.os.display }}..."
-          TEXT_CLEANER_EXEC="${{ steps.executables.outputs.text_cleaner_exec_path }}"
+          # ***** MUDANÇA AQUI *****
+          TEXT_CLEANER_EXEC="${{ steps.executables.outputs.text_cleaner_exec }}"
           
-          # A verificação de existência já foi feita na etapa anterior
-          # if [ ! -f "$TEXT_CLEANER_EXEC" ]; then ... exit 1; fi
-
           mkdir -p ./temp_text_cleaner_input ./temp_text_cleaner_output
           cat <<EOF > ./temp_text_cleaner_input/sample.txt
           <!DOCTYPE html>
@@ -268,7 +266,8 @@ jobs:
       - name: Run BPE Processor Tests
         run: |
           echo "🧪 Testing BPE Processor on ${{ matrix.os.display }}..."
-          BPE_EXEC="${{ steps.executables.outputs.bpe_processor_exec_path }}"
+          # ***** MUDANÇA AQUI *****
+          BPE_EXEC="${{ steps.executables.outputs.bpe_processor_exec }}"
           
           mkdir -p ./temp_bpe/corpus ./temp_bpe/model_output
           cat <<EOF > ./temp_bpe/corpus/corpus.txt
@@ -309,7 +308,7 @@ jobs:
         run: |
           rm -rf ./temp_text_cleaner_input ./temp_text_cleaner_output ./expected_output.txt ./temp_bpe
   
-  # ... (python_suite e ci_status permanecem os mesmos da sua última versão)
+  # ... (python_suite e ci_status permanecem os mesmos) ...
   python_suite:
     name: Python Tests (${{ matrix.os.display }})
     runs-on: ${{ matrix.os.runner }}
