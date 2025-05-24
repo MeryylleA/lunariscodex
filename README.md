@@ -190,9 +190,9 @@ python train.py \
 ```
 *For full training options, see the [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) page on our Wiki or run `python train.py --help`.*
 
-### 4. Running Inference (`inference.py` v0.2.0)
+### 4. Running Inference (`inference.py` v0.3.0)
 
-Generate text with your trained model using the enhanced `inference.py` script, which features a rich command-line interface.
+Generate text with your trained model using the enhanced `inference.py` script, featuring a rich, colorful command-line interface with advanced functionality.
 
 **Example:**
 ```bash
@@ -201,9 +201,20 @@ python inference.py \
     --tokenizer_name_or_path bigcode/starcoder \
     --prompt "USER: Write a Python function that calculates factorial.\nASSISTANT:" \
     --max_new_tokens 100 \
-    --temperature 0.7
+    --temperature 0.7 \
+    --syntax_highlight python
 ```
-*Run `python inference.py --help` for all options, including loading prompts from files (`--prompt_file`), saving output (`--output_file`), and disabling rich formatting (`--no_color`).*
+
+**Key Features:**
+- **Rich CLI**: Utilizes the `rich` library for formatted outputs, progress indicators, and detailed model/parameter information in structured tables.
+- **Interactive Mode**: Use `--interactive` for conversational prompting with commands (`/quit`, `/clear`, `/config`, `/help`).
+- **Streaming Generation**: Enable `--stream` for real-time token output, ideal for long generations.
+- **Syntax Highlighting**: Supports `--syntax_highlight` (default: `python`) for formatted code output.
+- **Performance Metrics**: Reports memory usage and tokens-per-second for both standard and streaming generation.
+- **Flexible Output**: Load prompts from files (`--prompt_file`), save output to plain text or markdown with metadata (`--output_file`), and disable rich formatting with `--no_color`.
+- **Configurable Generation**: Supports temperature, top-k, top-p, repetition penalty, and random seed for reproducibility.
+
+*Run `python inference.py --help` for all options, including advanced features like interactive mode and streaming generation. See the [Command-Line Arguments for Inference](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Inference) page on our Wiki for detailed usage.*
 
 ### 5. Using C++ Utilities (Optional)
 Helper tools for data analysis, text cleaning, and custom BPE tokenization are available. Each utility is located in its own directory (e.g., `bpe_trainer/` for `BpeProcessor`, `text_cleaner/`, `data_analyzer/`) and includes a `README.md` with specific compilation and usage instructions. They can also be compiled using the main `Makefile` at the root of the repository (e.g., `make bpe_processor`).
