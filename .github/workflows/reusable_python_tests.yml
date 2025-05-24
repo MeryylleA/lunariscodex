@@ -79,12 +79,15 @@ jobs:
           echo "def train_function_one(): return 'train1'" > ./temp_train_data/train_sample_1.py
           echo "class TrainSampleClass:\n  value = 'train2'" > ./temp_train_data/train_sample_2.py
           echo "def validation_function(): return 'validation_data_here'" > ./temp_val_data/val_sample_1.py
+          # CORREÇÃO AQUI para garantir conteúdo válido para o segundo exemplo de validação
+          echo "def another_val_func(): return 'more_val_data_for_testing'" > ./temp_val_data/val_sample_2.py
       - name: Test Data Preparation
         run: |
           python prepare_data.py --data_source_type text_file_lines --dataset_name_or_path "./temp_train_data/*.py" --tokenizer_name_or_path gpt2 --output_path ./processed_data/train_data.memmap --max_length 32 --max_examples 2 --overwrite_output
           python prepare_data.py --data_source_type text_file_lines --dataset_name_or_path "./temp_val_data/*.py" --tokenizer_name_or_path gpt2 --output_path ./processed_data/val_data.memmap --max_length 32 --max_examples 2 --overwrite_output
       - name: Test Training Pipeline
         run: |
+          # Mantendo --num_sequences_val 2 pois agora devemos ter 2 exemplos válidos de validação
           python train.py --memmap_file_train ./processed_data/train_data.memmap --num_sequences_train 2 --memmap_file_val ./processed_data/val_data.memmap --num_sequences_val 2 --tokenizer_name_or_path gpt2 --dataset_max_length 32 --dataset_dtype int32 --model_max_seq_len 32 --d_model 32 --n_layers 1 --n_heads 1 --batch_size 1 --num_epochs 1 --device cpu --checkpoint_dir ./checkpoints --log_interval 1 --save_strategy epoch --lora_rank 0 --seed 42
       - name: Test Inference Pipeline
         run: |
