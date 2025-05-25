@@ -1,3 +1,5 @@
+# .github/workflows/reusable_python_tests.yml
+
 name: Reusable Python Tests
 
 on:
@@ -65,13 +67,13 @@ jobs:
             --cov-report=term-missing \
             --tb=short
       - name: Upload Coverage Report
-        if: success() && matrix.os.name == 'ubuntu-latest'
+        if: success() && matrix.os.name == 'ubuntu-latest' # Usually latest is enough for coverage
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-${{ matrix.os.name }}.xml
           flags: model-tests-${{ matrix.os.name }}
-          name: codecov-ubuntu-latest-${{ inputs.python_version }}
+          name: codecov-${{ matrix.os.name }}-${{ inputs.python_version }} # More descriptive name
           fail_ci_if_error: true
       - name: Create Test Datasets
         run: |
@@ -79,7 +81,6 @@ jobs:
           echo "def train_function_one(): return 'train1'" > ./temp_train_data/train_sample_1.py
           echo "class TrainSampleClass:\n  value = 'train2'" > ./temp_train_data/train_sample_2.py
           echo "def validation_function(): return 'validation_data_here'" > ./temp_val_data/val_sample_1.py
-          # CORREÇÃO AQUI para garantir conteúdo válido para o segundo exemplo de validação
           echo "def another_val_func(): return 'more_val_data_for_testing'" > ./temp_val_data/val_sample_2.py
       - name: Test Data Preparation
         run: |
@@ -87,15 +88,109 @@ jobs:
           python prepare_data.py --data_source_type text_file_lines --dataset_name_or_path "./temp_val_data/*.py" --tokenizer_name_or_path gpt2 --output_path ./processed_data/val_data.memmap --max_length 32 --max_examples 2 --overwrite_output
       - name: Test Training Pipeline
         run: |
-          # Mantendo --num_sequences_val 2 pois agora devemos ter 2 exemplos válidos de validação
-          python train.py --memmap_file_train ./processed_data/train_data.memmap --num_sequences_train 2 --memmap_file_val ./processed_data/val_data.memmap --num_sequences_val 2 --tokenizer_name_or_path gpt2 --dataset_max_length 32 --dataset_dtype int32 --model_max_seq_len 32 --d_model 32 --n_layers 1 --n_heads 1 --batch_size 1 --num_epochs 1 --device cpu --checkpoint_dir ./checkpoints --log_interval 1 --save_strategy epoch --lora_rank 0 --seed 42
+          python train.py \
+            --memmap_file_train ./processed_data/train_data.memmap \
+            --num_sequences_train 2 \
+            --memmap_file_val ./processed_data/val_data.memmap \
+            --num_sequences_val 2 \
+            --tokenizer_name_or_path gpt2 \
+            --dataset_max_length 32 \
+            --dataset_dtype int32 \
+            --model_max_seq_len 32 \
+            --d_model 32 \
+            --n_layers 1 \
+            --n_heads 1 \
+            --batch_size 1 \
+            --num_epochs 1 \
+            --device cpu \
+            --checkpoint_dir ./checkpoints \
+            --log_interval 1 \
+            --save_strategy epoch \
+            --lora_rank 0 \
+            --seed 42
       - name: Test Inference Pipeline
         run: |
           CHECKPOINT_PATH="./checkpoints/best_model.pt"
-          if [ ! -f "$CHECKPOINT_PATH" ]; then ls -la ./checkpoints/; exit 1; fi
-          OUTPUT=$(python inference.py --checkpoint_path "$CHECKPOINT_PATH" --tokenizer_name_or_path gpt2 --prompt "Test prompt:" --max_new_tokens 5 --temperature 0.5 --device cpu --no_color)
-          if [ $? -ne 0 ] || [ -z "$OUTPUT" ]; then echo "Inference test failed"; exit 1; fi
-          echo "Generated output (first 100 chars): ${OUTPUT:0:100}..."
+          SHA256_FILE_PATH="${CHECKPOINT_PATH}.sha256"
+          PYTHON_OUTPUT_LOG="inference_output.log"
+          CRITICAL_ERROR_MSG_SHA="Aborting due to checkpoint integrity verification failure"
+          CRITICAL_ERROR_MSG_LOAD="Critical error during model load" # Assuming inference.py might log this
+
+          echo "DEBUG: Current directory: $(pwd)"
+          echo "DEBUG: Checking for checkpoint and SHA256 file before inference..."
+          if [ ! -f "$CHECKPOINT_PATH" ]; then
+            echo "❌ ERROR: Checkpoint file $CHECKPOINT_PATH not found!"
+            echo "DEBUG: Listing contents of ./checkpoints/ directory:"
+            ls -la ./checkpoints/
+            exit 1
+          else
+            echo "✅ Checkpoint file $CHECKPOINT_PATH found."
+          fi
+
+          if [ ! -f "$SHA256_FILE_PATH" ]; then
+            echo "⚠️ WARNING: SHA256 file $SHA256_FILE_PATH not found! Inference will proceed but SHA check will be skipped by inference.py."
+          else
+            echo "✅ SHA256 file $SHA256_FILE_PATH found."
+            echo "DEBUG: SHA256 file content:"
+            cat "$SHA256_FILE_PATH"
+          fi
+
+          echo "DEBUG: Attempting to run inference.py..."
+          
+          # Execute inference.py and redirect stdout and stderr to the log file
+          python inference.py \
+            --checkpoint_path "$CHECKPOINT_PATH" \
+            --tokenizer_name_or_path gpt2 \
+            --prompt "Test prompt:" \
+            --max_new_tokens 5 \
+            --temperature 0.5 \
+            --device cpu \
+            --no_color > "$PYTHON_OUTPUT_LOG" 2>&1
+          
+          INFERENCE_EXIT_CODE=$?
+
+          echo "DEBUG: inference.py exited with code $INFERENCE_EXIT_CODE"
+          echo "--- Start of inference.py output (from $PYTHON_OUTPUT_LOG) ---"
+          cat "$PYTHON_OUTPUT_LOG" || echo "DEBUG: $PYTHON_OUTPUT_LOG is empty or unreadable."
+          echo "--- End of inference.py output ---"
+
+          # Check for failure conditions
+          FAILED=false
+          FAILURE_REASON=""
+
+          if [ $INFERENCE_EXIT_CODE -ne 0 ]; then
+            FAILED=true
+            FAILURE_REASON="inference.py exited with non-zero code ($INFERENCE_EXIT_CODE)."
+          elif ! grep -qE ".+" "$PYTHON_OUTPUT_LOG"; then # Check if output log is empty
+            FAILED=true
+            FAILURE_REASON="Output log file '$PYTHON_OUTPUT_LOG' is empty."
+          elif grep -qF "$CRITICAL_ERROR_MSG_SHA" "$PYTHON_OUTPUT_LOG"; then
+            FAILED=true
+            FAILURE_REASON="Critical SHA256 error message found in output: '$CRITICAL_ERROR_MSG_SHA'"
+          elif grep -qF "$CRITICAL_ERROR_MSG_LOAD" "$PYTHON_OUTPUT_LOG"; then # Add more critical messages if needed
+             FAILED=true
+             FAILURE_REASON="Critical model load error message found in output: '$CRITICAL_ERROR_MSG_LOAD'"
+          fi
+          
+          # Example of checking for expected successful output (optional, adjust pattern as needed)
+          # For instance, if inference.py prints "✓ Text generation process completed." on success
+          # if [ "$FAILED" == "false" ] && ! grep -q "Text generation process completed" "$PYTHON_OUTPUT_LOG"; then
+          #   FAILED=true
+          #   FAILURE_REASON="Expected success message not found in inference output."
+          # fi
+
+          if [ "$FAILED" == "true" ]; then
+            echo "❌ Inference test failed."
+            echo "   Reason: $FAILURE_REASON"
+            exit 1
+          fi
+          
+          OUTPUT_FOR_CI_LOG=$(head -c 200 "$PYTHON_OUTPUT_LOG" | tr -d '\n\r')
+          echo "✅ Inference test passed. Generated output sample (first 200 chars, no newlines): ${OUTPUT_FOR_CI_LOG}..."
+
       - name: Cleanup Python Test Files
-        if: always()
-        run: rm -rf ./temp_train_data ./temp_val_data ./processed_data ./checkpoints ./coverage-${{ matrix.os.name }}.xml
+        if: always() # Ensures cleanup even if previous steps fail
+        run: |
+          echo "Cleaning up test artifacts..."
+          rm -rf ./temp_train_data ./temp_val_data ./processed_data ./checkpoints ./coverage-${{ matrix.os.name }}.xml "$PYTHON_OUTPUT_LOG"
+          echo "Cleanup complete."
