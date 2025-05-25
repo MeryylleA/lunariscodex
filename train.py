@@ -21,7 +21,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 def set_seed(seed_value=42):
-    """Sets the seed for reproducibility."""
+    """
+    Sets random seeds for Python, NumPy, and PyTorch to ensure reproducible results.
+    
+    If CUDA is available, also sets the seed for all CUDA devices.
+    """
     random.seed(seed_value)
     np.random.seed(seed_value)
     torch.manual_seed(seed_value)
@@ -29,7 +33,15 @@ def set_seed(seed_value=42):
         torch.cuda.manual_seed_all(seed_value)
 
 def compute_sha256(filepath):
-    """Compute SHA-256 hash of a file for integrity verification."""
+    """
+    Computes the SHA-256 hash of a file.
+    
+    Args:
+        filepath: Path to the file to hash.
+    
+    Returns:
+        The hexadecimal SHA-256 hash string if successful, or None if an error occurs.
+    """
     hash_sha256 = hashlib.sha256()
     try:
         with open(filepath, "rb") as f:
@@ -42,6 +54,18 @@ def compute_sha256(filepath):
 
 class MemmapCodeDataset(Dataset):
     def __init__(self, memmap_file, num_sequences, max_length=1024, tokenizer_pad_id=0, dtype_str="int32"):
+        """
+        Initializes a memory-mapped dataset for tokenized sequences.
+        
+        Loads a memmap file containing pre-tokenized sequences for efficient access during training or evaluation. Raises FileNotFoundError if the file does not exist, and logs errors on loading issues.
+        
+        Args:
+            memmap_file: Path to the memory-mapped file containing tokenized data.
+            num_sequences: Number of sequences stored in the memmap file.
+            max_length: Maximum sequence length for each entry.
+            tokenizer_pad_id: Token ID used for padding in the dataset.
+            dtype_str: Data type of the stored tokens, either "int16" or "int32".
+        """
         logger.info(f"Loading dataset from {memmap_file} with {num_sequences} sequences and max_length {max_length}")
         dtype = np.int16 if dtype_str == "int16" else np.int32
 
@@ -59,15 +83,41 @@ class MemmapCodeDataset(Dataset):
         logger.info(f"Dataset loaded successfully. Pad ID: {self.tokenizer_pad_id}")
 
     def __len__(self):
+        """
+        Returns the number of sequences in the dataset.
+        """
         return len(self.data)
 
     def __getitem__(self, idx):
+        """
+        Retrieves a tokenized sequence and its attention mask at the specified index.
+        
+        Args:
+            idx: Index of the sequence to retrieve.
+        
+        Returns:
+            A dictionary containing:
+                - 'input_ids': Tensor of token IDs for the sequence.
+                - 'attention_mask': Tensor indicating non-padding tokens (1 for tokens, 0 for padding).
+        """
         input_ids = torch.from_numpy(np.array(self.data[idx], dtype=np.int64))
         attention_mask = (input_ids != self.tokenizer_pad_id).long()
         return {"input_ids": input_ids, "attention_mask": attention_mask}
 
 def compute_metrics(logits, targets, attention_mask):
-    """Computes loss, perplexity, and accuracy, ignoring padded tokens."""
+    """
+    Calculates average cross-entropy loss, perplexity, and accuracy over non-padded tokens.
+    
+    The function shifts logits, targets, and attention masks to align predictions with targets, then computes metrics only on positions where the attention mask is active (i.e., not padding). If no active tokens are present, returns zero loss, infinite perplexity, and zero accuracy.
+    
+    Args:
+        logits: Model output logits of shape (batch_size, seq_len, vocab_size).
+        targets: Target token indices of shape (batch_size, seq_len).
+        attention_mask: Attention mask of shape (batch_size, seq_len), where 1 indicates valid tokens.
+    
+    Returns:
+        A tuple of (average loss, perplexity, accuracy) computed over active (non-padded) tokens.
+    """
     logits_shifted = logits[..., :-1, :].contiguous()
     targets_shifted = targets[..., 1:].contiguous()
     attention_mask_shifted = attention_mask[..., 1:].contiguous()
@@ -98,7 +148,21 @@ def compute_metrics(logits, targets, attention_mask):
     return avg_loss, perplexity, accuracy
 
 def save_checkpoint(model, optimizer, epoch, step, current_loss, args, is_best=False, scheduler=None):
-    """Saves training checkpoint with SHA-256 verification."""
+    """
+    Saves the current model, optimizer, and scheduler states to a checkpoint file with SHA-256 integrity verification.
+    
+    The checkpoint includes model weights, optimizer and scheduler states, training progress, configuration, and metadata. A SHA-256 hash file is written alongside the checkpoint for later integrity checks. If `is_best` is True, also saves a copy as `best_model.pt` with its own hash.
+    
+    Args:
+        epoch: The current training epoch (zero-based).
+        step: The current training step.
+        current_loss: The loss value at the time of checkpointing.
+        is_best: If True, saves an additional copy as the best model checkpoint.
+        scheduler: Optional learning rate scheduler to save state for.
+    
+    Raises:
+        Exception: If saving the checkpoint or hash file fails.
+    """
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
     base_filename = f"lunaris_codex_epoch-{epoch+1}_step-{step}"
@@ -145,7 +209,11 @@ def save_checkpoint(model, optimizer, epoch, step, current_loss, args, is_best=F
         raise
 
 def verify_checkpoint_integrity(checkpoint_path):
-    """Verify checkpoint integrity using SHA-256 hash."""
+    """
+    Verifies the integrity of a checkpoint file by comparing its SHA-256 hash to a stored hash.
+    
+    If the corresponding `.sha256` file is missing or verification fails due to an error, the function assumes the checkpoint is valid and returns True. Returns False only if the hash file exists and the hashes do not match.
+    """
     hash_file = checkpoint_path + ".sha256"
     if not os.path.exists(hash_file):
         logger.warning(f"No hash file found for {checkpoint_path}")
@@ -167,7 +235,14 @@ def verify_checkpoint_integrity(checkpoint_path):
         return True  # Assume valid if verification fails
 
 def load_checkpoint(model, optimizer, args, device, scheduler=None):
-    """Loads training checkpoint with integrity verification."""
+    """
+    Loads model, optimizer, and scheduler states from a checkpoint file after verifying its integrity.
+    
+    If a checkpoint is specified or found in the checkpoint directory, verifies its SHA-256 hash before loading. Handles compatibility between compiled and uncompiled model state dictionaries. Loads optimizer and scheduler states only if the LoRA configuration matches between the checkpoint and current run. Returns the starting epoch, step, and minimum validation loss for resuming training. If loading fails or no checkpoint is found, returns defaults to start training from scratch.
+    
+    Returns:
+        Tuple of (start_epoch, start_step, min_val_loss) for resuming training.
+    """
     start_epoch, start_step, min_val_loss = 0, 0, float("inf")
 
     checkpoint_to_load = args.resume_from_checkpoint
@@ -241,7 +316,20 @@ def load_checkpoint(model, optimizer, args, device, scheduler=None):
     return start_epoch, start_step, min_val_loss
 
 def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args):
-    """Main training loop with robust error handling."""
+    """
+    Trains the model using the provided data loaders, optimizer, and configuration.
+    
+    Runs the main training loop with support for mixed precision, gradient clipping, checkpointing, validation, and optional model compilation. Tracks and logs training and validation metrics, saves checkpoints according to the configured strategy, and handles best model tracking. Raises an exception if invalid loss values are encountered.
+    
+    Args:
+        train_dataloader: DataLoader yielding training batches.
+        val_dataloader: DataLoader yielding validation batches, or None to skip validation.
+        tokenizer: Tokenizer used for model input preparation.
+        args: Namespace containing training and optimization configuration.
+    
+    Returns:
+        The trained model, potentially compiled if requested.
+    """
     device = torch.device(args.device)
     model.to(device)
 
@@ -384,7 +472,20 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args):
     return model
 
 def evaluate_model(model, dataloader, args, device):
-    """Evaluate model on validation/test data."""
+    """
+    Evaluates the model on a validation or test dataset and computes average loss, perplexity, and accuracy.
+    
+    Runs the model in evaluation mode without gradient computation, processes each batch with optional mixed precision, and aggregates metrics across all batches.
+    
+    Args:
+        model: The model to evaluate.
+        dataloader: DataLoader providing evaluation data batches.
+        args: Configuration object with evaluation and precision settings.
+        device: Device on which to perform evaluation.
+    
+    Returns:
+        A tuple of (average loss, average perplexity, average accuracy) over the dataset.
+    """
     model.eval()
     total_loss, total_perplexity, total_accuracy = 0.0, 0.0, 0.0
 

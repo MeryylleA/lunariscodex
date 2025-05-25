@@ -63,7 +63,9 @@ logging.basicConfig(
 logger = logging.getLogger("lunaris")
 
 def show_header():
-    """Display a fancy header for the script"""
+    """
+    Displays a styled header panel with the script name and version in the console.
+    """
     title = Text("Lunaris Codex Inference Engine", style="bold blue")
     subtitle = Text(f"v{SCRIPT_VERSION} - Enhanced Edition", style="dim")
     header_text = Text.assemble(title, " ", subtitle)
@@ -71,7 +73,15 @@ def show_header():
 
 # --- SHA-256 Utility Functions (adapted from train.py) ---
 def compute_sha256(filepath: str) -> str | None:
-    """Compute SHA-256 hash of a file for integrity verification."""
+    """
+    Computes the SHA-256 hash of a file.
+    
+    Args:
+        filepath: Path to the file to hash.
+    
+    Returns:
+        The hexadecimal SHA-256 hash string if successful, or None if an error occurs.
+    """
     hash_sha256 = hashlib.sha256()
     try:
         with open(filepath, "rb") as f:
@@ -83,7 +93,11 @@ def compute_sha256(filepath: str) -> str | None:
         return None
 
 def verify_checkpoint_integrity(checkpoint_path: str) -> bool:
-    """Verify checkpoint integrity using SHA-256 hash."""
+    """
+    Verifies the integrity of a checkpoint file by comparing its SHA-256 hash to a stored hash.
+    
+    If a corresponding `.sha256` file is present, the function reads the expected hash and compares it to the computed hash of the checkpoint file. Returns True if the hashes match, if the hash file is missing or empty, or if an error occurs during verification. Returns False only if a hash mismatch is detected.
+    """
     hash_file = checkpoint_path + ".sha256"
     if not os.path.exists(hash_file):
         logger.warning(f"No hash file found for [dim_info]{checkpoint_path}[/dim_info]. Skipping SHA-256 verification.")
@@ -114,7 +128,11 @@ def verify_checkpoint_integrity(checkpoint_path: str) -> bool:
         return True
 
 def validate_checkpoint_exists(checkpoint_path: str) -> bool:
-    """Validate checkpoint file exists and log basic info."""
+    """
+    Checks if the checkpoint file exists and logs its presence and size.
+    
+    Logs an error if the file is missing, and a warning if the file size is suspiciously small. Returns True if the file exists and is accessible, otherwise False.
+    """
     if not os.path.exists(checkpoint_path):
         logger.error(f"Checkpoint file not found: [dim_info]{checkpoint_path}[/dim_info]")
         return False
@@ -129,16 +147,18 @@ def validate_checkpoint_exists(checkpoint_path: str) -> bool:
         return False
 
 def get_memory_usage():
-    """Get current memory usage"""
+    """
+    Returns the current process memory usage in megabytes.
+    """
     process = psutil.Process()
     memory_info = process.memory_info()
     return memory_info.rss / 1024 / 1024  # MB
 
 def load_model_from_checkpoint(checkpoint_path: str, device: torch.device) -> tuple[LunarisMind, LunarisCodexConfig, dict] | None:
     """
-    Loads the model, its configuration, and training arguments from a checkpoint.
-    Enhanced with SHA-256 integrity verification and robust error handling.
-    Returns None on critical failure.
+    Loads a Lunaris Mind model, its configuration, and training arguments from a checkpoint file.
+    
+    Performs SHA-256 integrity verification on the checkpoint, validates required configuration fields, and handles both standard and torch compiled checkpoints. On success, returns the model instance, its configuration, and any training arguments found in the checkpoint. Returns None if integrity verification or loading fails.
     """
     if not verify_checkpoint_integrity(checkpoint_path):
         logger.error(f"Aborting due to checkpoint integrity verification failure for: [dim_info]{checkpoint_path}[/dim_info]")
@@ -239,6 +259,12 @@ def load_model_from_checkpoint(checkpoint_path: str, device: torch.device) -> tu
     return model, model_config, train_args_from_checkpoint
 
 def display_generation_params(params):
+    """
+    Displays generation parameters in a styled table panel using the rich console.
+    
+    Args:
+    	params: A dictionary of generation parameter names and their values to display.
+    """
     param_table = Table(show_header=False, box=ROUNDED, title_style="bold magenta", border_style="magenta")
     param_table.add_column("Parameter", style="param")
     param_table.add_column("Value", style="info")
@@ -247,6 +273,18 @@ def display_generation_params(params):
     console.print(Panel(param_table, title="[bold]Generation Parameters[/bold]", border_style="magenta", expand=False))
 
 def format_code_output(text: str, language: str = "python") -> Syntax | Text:
+    """
+    Formats code or text for console output with syntax highlighting if supported.
+    
+    If the specified language is unsupported or an error occurs, returns plain text formatting as a fallback.
+    
+    Args:
+        text: The code or text to format.
+        language: The programming language for syntax highlighting. If set to "auto" or empty, plain text formatting is used.
+    
+    Returns:
+        A Rich Syntax object with highlighting if possible, otherwise a plain Text object.
+    """
     try:
         if not language or language.lower() == 'auto':
             language = "text" # Keep it simple if auto, rely on pygments default lexer guessing
@@ -259,6 +297,22 @@ def format_code_output(text: str, language: str = "python") -> Syntax | Text:
         return Text(text)
 
 def stream_generation(model, tokenizer, input_ids, max_new_tokens, temperature, top_k, top_p, repetition_penalty, eos_token_id, device, syntax_highlight_lang):
+    """
+    Generates text from a model in a streaming, token-by-token fashion with live console updates.
+    
+    Args:
+        input_ids: The initial input token IDs to prompt the model.
+        max_new_tokens: Maximum number of tokens to generate.
+        temperature: Sampling temperature for controlling randomness.
+        top_k: Limits sampling to the top-k most probable tokens.
+        top_p: Nucleus sampling threshold; considers tokens with cumulative probability up to top_p.
+        repetition_penalty: Penalty factor to discourage repetition in generated text.
+        eos_token_id: Token ID that signals end of generation if encountered.
+        syntax_highlight_lang: Language identifier for syntax highlighting of the generated output.
+    
+    Returns:
+        A tuple containing the full sequence of generated token IDs, the generated text, and the average tokens per second achieved during generation.
+    """
     model.eval()
     generated_ids = input_ids.clone()
     full_generated_text = ""
@@ -330,6 +384,11 @@ def stream_generation(model, tokenizer, input_ids, max_new_tokens, temperature, 
 
 
 def interactive_mode(model, tokenizer, device, config_from_checkpoint, syntax_highlight_lang):
+    """
+    Runs an interactive command-line session for text generation with dynamic parameter adjustment.
+    
+    Allows users to enter prompts, receive streamed model responses with syntax highlighting, and modify generation parameters on the fly using commands. Supports conversation history, configurable settings, and special commands for help, clearing history, and exiting.
+    """
     console.print(
         Panel(
             Text.assemble(
@@ -420,6 +479,11 @@ def interactive_mode(model, tokenizer, device, config_from_checkpoint, syntax_hi
         except Exception as e: logger.error(f"Error in interactive mode: {e}", exc_info=True)
 
 def main():
+    """
+    Runs the command-line interface for text generation using a Lunaris Codex model.
+    
+    Parses command-line arguments, loads the specified model checkpoint and tokenizer, and generates text based on the provided prompt or prompt file. Supports both interactive chat and single-prompt modes, with options for streaming output, syntax highlighting, and saving results to a file. Handles device selection, checkpoint integrity verification, tokenizer setup, and generation parameter configuration. Displays generation parameters, input prompt, and generated output with rich formatting. Logs progress, errors, and performance metrics throughout the process.
+    """
     parser = argparse.ArgumentParser(
         description=f"Generate text using a trained Lunaris Codex model (Enhanced v{SCRIPT_VERSION}).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
