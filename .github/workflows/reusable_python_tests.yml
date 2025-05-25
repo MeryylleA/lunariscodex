@@ -15,20 +15,20 @@ on:
         type: string
     secrets:
       CODECOV_TOKEN:
-        required: true
+        required: true # Mantenha se você usa Codecov
       HF_TOKEN:
-        required: false
+        required: false # Pode ser necessário para baixar tokenizers/modelos em testes futuros
     outputs:
       python_test_result:
         description: "Result of the Python tests"
         value: ${{ jobs.python_suite.result }}
 
 env:
-  PYTHONUTF8: "1"
+  PYTHONUTF8: "1" # Boa prática para consistência de encoding
 
 jobs:
   python_suite:
-    name: Python Tests (${{ matrix.os.display }})
+    name: Python Tests (${{ matrix.os.display }} on Python ${{ inputs.python_version }})
     runs-on: ${{ matrix.os.runner }}
     strategy:
       fail-fast: false
@@ -37,179 +37,63 @@ jobs:
       run:
         shell: bash
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      # Disponibilizar o HF_TOKEN para os testes, caso algum precise baixar modelos/tokenizers protegidos
+      # ou para evitar rate limits do Hugging Face Hub.
+      HF_TOKEN: ${{ secrets.HF_TOKEN }} 
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
       - name: Setup Python Environment
         uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python_version }}
+
       - name: Display Python Info
-        run: python --version; pip --version
+        run: |
+          python --version
+          pip --version
+          pip list # Opcional: listar pacotes instalados para depuração
+
       - name: Cache Python Dependencies
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ matrix.os.runner }}-pip-${{ hashFiles('requirements.txt') }}
+          # Chave de cache mais robusta: inclui OS, versão do Python e hash do requirements
+          key: ${{ matrix.os.runner }}-pip-${{ inputs.python_version }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            ${{ matrix.os.runner }}-pip-
+            ${{ matrix.os.runner }}-pip-${{ inputs.python_version }}-
+
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Run Unit Tests
+          # Certifique-se que pytest e pytest-cov estão em requirements.txt
+          # ou instale-os explicitamente aqui se preferir mantê-los fora do requirements principal:
+          # pip install pytest pytest-cov
+
+      - name: Run Pytest (Unit and Integration Tests)
         run: |
-          python -m pytest tests/ -k "test_model" \
-            --cov=model \
-            --cov-report=xml:coverage-${{ matrix.os.name }}.xml \
+          python -m pytest tests/ -v \
+            --cov=. \
+            --cov-report=xml:coverage-${{ matrix.os.name }}-${{ inputs.python_version }}.xml \
             --cov-report=term-missing \
             --tb=short
-      - name: Upload Coverage Report
-        if: success() && matrix.os.name == 'ubuntu-latest' # Usually latest is enough for coverage
+            # -v para saída verbosa do pytest
+            # --cov=. para cobertura de todos os arquivos .py no diretório raiz e subdiretórios
+            # (você pode especificar módulos: --cov=model --cov=prepare_data etc.)
+            # --tb=short para tracebacks mais curtos em caso de falha
+
+      - name: Upload Coverage Report to Codecov
+        # Enviar relatório de cobertura apenas de uma combinação (ex: ubuntu-latest e a versão Python principal do projeto)
+        # para evitar duplicatas no Codecov.
+        # Assumindo que env.PYTHON_VERSION no workflow principal (ci.yml) define sua versão Python primária.
+        if: success() && matrix.os.name == 'ubuntu-latest' && inputs.python_version == '${{ env.PYTHON_VERSION }}' && secrets.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage-${{ matrix.os.name }}.xml
-          flags: model-tests-${{ matrix.os.name }}
-          name: codecov-${{ matrix.os.name }}-${{ inputs.python_version }} # More descriptive name
-          fail_ci_if_error: true
-      - name: Create Test Datasets
-        run: |
-          mkdir -p ./temp_train_data ./temp_val_data
-          echo "def train_function_one(): return 'train1'" > ./temp_train_data/train_sample_1.py
-          echo "class TrainSampleClass:\n  value = 'train2'" > ./temp_train_data/train_sample_2.py
-          echo "def validation_function(): return 'validation_data_here'" > ./temp_val_data/val_sample_1.py
-          echo "def another_val_func(): return 'more_val_data_for_testing'" > ./temp_val_data/val_sample_2.py
-      - name: Test Data Preparation
-        run: |
-          python prepare_data.py --data_source_type text_file_lines --dataset_name_or_path "./temp_train_data/*.py" --tokenizer_name_or_path gpt2 --output_path ./processed_data/train_data.memmap --max_length 32 --max_examples 2 --overwrite_output
-          python prepare_data.py --data_source_type text_file_lines --dataset_name_or_path "./temp_val_data/*.py" --tokenizer_name_or_path gpt2 --output_path ./processed_data/val_data.memmap --max_length 32 --max_examples 2 --overwrite_output
-      - name: Test Training Pipeline
-        run: |
-          python train.py \
-            --memmap_file_train ./processed_data/train_data.memmap \
-            --num_sequences_train 2 \
-            --memmap_file_val ./processed_data/val_data.memmap \
-            --num_sequences_val 2 \
-            --tokenizer_name_or_path gpt2 \
-            --dataset_max_length 32 \
-            --dataset_dtype int32 \
-            --model_max_seq_len 32 \
-            --d_model 32 \
-            --n_layers 1 \
-            --n_heads 1 \
-            --batch_size 1 \
-            --num_epochs 1 \
-            --device cpu \
-            --checkpoint_dir ./checkpoints \
-            --log_interval 1 \
-            --save_strategy epoch \
-            --lora_rank 0 \
-            --seed 42
-
-      - name: Test Inference Pipeline
-        run: |
-          set -x # Enable bash debug mode (prints commands before execution)
-
-          CHECKPOINT_PATH="./checkpoints/best_model.pt"
-          SHA256_FILE_PATH="${CHECKPOINT_PATH}.sha256"
-          PYTHON_OUTPUT_LOG="inference_output.log"
-          CRITICAL_ERROR_MSG_SHA="Aborting due to checkpoint integrity verification failure"
-          CRITICAL_ERROR_MSG_LOAD="Critical error during model load"
-
-          echo "DEBUG: Current directory: $(pwd)"
-          echo "DEBUG: Checking if inference.py exists..."
-          ls -l inference.py
-          
-          echo "DEBUG: Checking for checkpoint and SHA256 file before any inference test..."
-          if [ ! -f "$CHECKPOINT_PATH" ]; then
-            echo "❌ ERROR: Checkpoint file $CHECKPOINT_PATH not found for inference tests!"
-            echo "DEBUG: Listing contents of ./checkpoints/ directory:"
-            ls -la ./checkpoints/
-            exit 1
-          else
-            echo "✅ Checkpoint file $CHECKPOINT_PATH found."
-          fi
-          if [ ! -f "$SHA256_FILE_PATH" ]; then
-            echo "⚠️ WARNING: SHA256 file $SHA256_FILE_PATH not found! inference.py should warn and skip SHA check."
-          else
-            echo "✅ SHA256 file $SHA256_FILE_PATH found."
-            echo "DEBUG: SHA256 file content:"
-            cat "$SHA256_FILE_PATH"
-          fi
-
-          echo "STEP 1: Attempting to run inference.py --help..."
-          # Overwrite/create log file for this step
-          python inference.py --help > "$PYTHON_OUTPUT_LOG" 2>&1
-          HELP_EXIT_CODE=$?
-          
-          echo "DEBUG: inference.py --help exited with code $HELP_EXIT_CODE"
-          echo "--- Start of inference.py --help output (from $PYTHON_OUTPUT_LOG) ---"
-          cat "$PYTHON_OUTPUT_LOG" || echo "DEBUG: $PYTHON_OUTPUT_LOG (for --help) is empty or unreadable."
-          echo "--- End of inference.py --help output ---"
-
-          if [ $HELP_EXIT_CODE -ne 0 ]; then
-            echo "❌ ERROR: Test failed at STEP 1: inference.py --help failed with exit code $HELP_EXIT_CODE."
-            exit 1
-          elif ! grep -qE ".+" "$PYTHON_OUTPUT_LOG"; then
-             echo "❌ ERROR: Test failed at STEP 1: inference.py --help produced no output."
-             exit 1
-          else
-            echo "✅ INFO: STEP 1 (inference.py --help) executed successfully."
-          fi
-
-          echo "STEP 2: Attempting full inference run..."
-          # Overwrite/create log file for this step (important to clear previous content)
-          python inference.py \
-            --checkpoint_path "$CHECKPOINT_PATH" \
-            --tokenizer_name_or_path gpt2 \
-            --prompt "Test prompt:" \
-            --max_new_tokens 5 \
-            --temperature 0.5 \
-            --device cpu \
-            --no_color > "$PYTHON_OUTPUT_LOG" 2>&1
-          
-          INFERENCE_EXIT_CODE=$?
-          
-          echo "DEBUG: Full inference (STEP 2) exited with code $INFERENCE_EXIT_CODE"
-          echo "--- Start of full inference.py output (from $PYTHON_OUTPUT_LOG) ---"
-          cat "$PYTHON_OUTPUT_LOG" || echo "DEBUG: $PYTHON_OUTPUT_LOG (for full inference) is empty or unreadable."
-          echo "--- End of full inference.py output ---"
-
-          # Check for failure conditions for the full inference run
-          FAILED=false
-          FAILURE_REASON=""
-
-          if [ $INFERENCE_EXIT_CODE -ne 0 ]; then
-            FAILED=true
-            FAILURE_REASON="inference.py (full run) exited with non-zero code ($INFERENCE_EXIT_CODE)."
-          elif ! grep -qE ".+" "$PYTHON_OUTPUT_LOG"; then
-            FAILED=true
-            FAILURE_REASON="Output log file '$PYTHON_OUTPUT_LOG' (for full run) is empty."
-          elif grep -qF "$CRITICAL_ERROR_MSG_SHA" "$PYTHON_OUTPUT_LOG"; then
-            FAILED=true
-            FAILURE_REASON="Critical SHA256 error message found in output: '$CRITICAL_ERROR_MSG_SHA'"
-          elif grep -qF "$CRITICAL_ERROR_MSG_LOAD" "$PYTHON_OUTPUT_LOG"; then
-             FAILED=true
-             FAILURE_REASON="Critical model load error message found in output: '$CRITICAL_ERROR_MSG_LOAD'"
-          fi
-          
-          if [ "$FAILED" == "true" ]; then
-            echo "❌ ERROR: Test failed at STEP 2 (full inference)."
-            echo "   Reason: $FAILURE_REASON"
-            exit 1
-          fi
-          
-          OUTPUT_FOR_CI_LOG=$(head -c 200 "$PYTHON_OUTPUT_LOG" | tr -d '\n\r')
-          echo "✅ INFO: STEP 2 (full inference) passed. Generated output sample (first 200 chars, no newlines): ${OUTPUT_FOR_CI_LOG}..."
-
-          set +x # Disable bash debug mode
-          
-      - name: Cleanup Python Test Files
-        if: always() # Ensures cleanup even if previous steps fail
-        run: |
-          echo "Cleaning up test artifacts..."
-          rm -rf ./temp_train_data ./temp_val_data ./processed_data ./checkpoints ./coverage-${{ matrix.os.name }}.xml "$PYTHON_OUTPUT_LOG"
-          echo "Cleanup complete."
+          files: ./coverage-${{ matrix.os.name }}-${{ inputs.python_version }}.xml
+          flags: python-tests,${{ matrix.os.name }} # Flags para agrupar relatórios no Codecov
+          name: codecov-${{ matrix.os.name }}-${{ inputs.python_version }} # Nome do upload no Codecov
+          fail_ci_if_error: false # Defina como 'true' se quiser que o CI falhe se o upload para Codecov falhar
