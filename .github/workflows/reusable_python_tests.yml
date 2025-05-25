@@ -108,36 +108,60 @@ jobs:
             --save_strategy epoch \
             --lora_rank 0 \
             --seed 42
+
       - name: Test Inference Pipeline
         run: |
+          set -x # Enable bash debug mode (prints commands before execution)
+
           CHECKPOINT_PATH="./checkpoints/best_model.pt"
           SHA256_FILE_PATH="${CHECKPOINT_PATH}.sha256"
           PYTHON_OUTPUT_LOG="inference_output.log"
           CRITICAL_ERROR_MSG_SHA="Aborting due to checkpoint integrity verification failure"
-          CRITICAL_ERROR_MSG_LOAD="Critical error during model load" # Assuming inference.py might log this
+          CRITICAL_ERROR_MSG_LOAD="Critical error during model load"
 
           echo "DEBUG: Current directory: $(pwd)"
-          echo "DEBUG: Checking for checkpoint and SHA256 file before inference..."
+          echo "DEBUG: Checking if inference.py exists..."
+          ls -l inference.py
+          
+          echo "DEBUG: Checking for checkpoint and SHA256 file before any inference test..."
           if [ ! -f "$CHECKPOINT_PATH" ]; then
-            echo "❌ ERROR: Checkpoint file $CHECKPOINT_PATH not found!"
+            echo "❌ ERROR: Checkpoint file $CHECKPOINT_PATH not found for inference tests!"
             echo "DEBUG: Listing contents of ./checkpoints/ directory:"
             ls -la ./checkpoints/
             exit 1
           else
             echo "✅ Checkpoint file $CHECKPOINT_PATH found."
           fi
-
           if [ ! -f "$SHA256_FILE_PATH" ]; then
-            echo "⚠️ WARNING: SHA256 file $SHA256_FILE_PATH not found! Inference will proceed but SHA check will be skipped by inference.py."
+            echo "⚠️ WARNING: SHA256 file $SHA256_FILE_PATH not found! inference.py should warn and skip SHA check."
           else
             echo "✅ SHA256 file $SHA256_FILE_PATH found."
             echo "DEBUG: SHA256 file content:"
             cat "$SHA256_FILE_PATH"
           fi
 
-          echo "DEBUG: Attempting to run inference.py..."
+          echo "STEP 1: Attempting to run inference.py --help..."
+          # Overwrite/create log file for this step
+          python inference.py --help > "$PYTHON_OUTPUT_LOG" 2>&1
+          HELP_EXIT_CODE=$?
           
-          # Execute inference.py and redirect stdout and stderr to the log file
+          echo "DEBUG: inference.py --help exited with code $HELP_EXIT_CODE"
+          echo "--- Start of inference.py --help output (from $PYTHON_OUTPUT_LOG) ---"
+          cat "$PYTHON_OUTPUT_LOG" || echo "DEBUG: $PYTHON_OUTPUT_LOG (for --help) is empty or unreadable."
+          echo "--- End of inference.py --help output ---"
+
+          if [ $HELP_EXIT_CODE -ne 0 ]; then
+            echo "❌ ERROR: Test failed at STEP 1: inference.py --help failed with exit code $HELP_EXIT_CODE."
+            exit 1
+          elif ! grep -qE ".+" "$PYTHON_OUTPUT_LOG"; then
+             echo "❌ ERROR: Test failed at STEP 1: inference.py --help produced no output."
+             exit 1
+          else
+            echo "✅ INFO: STEP 1 (inference.py --help) executed successfully."
+          fi
+
+          echo "STEP 2: Attempting full inference run..."
+          # Overwrite/create log file for this step (important to clear previous content)
           python inference.py \
             --checkpoint_path "$CHECKPOINT_PATH" \
             --tokenizer_name_or_path gpt2 \
@@ -148,46 +172,41 @@ jobs:
             --no_color > "$PYTHON_OUTPUT_LOG" 2>&1
           
           INFERENCE_EXIT_CODE=$?
+          
+          echo "DEBUG: Full inference (STEP 2) exited with code $INFERENCE_EXIT_CODE"
+          echo "--- Start of full inference.py output (from $PYTHON_OUTPUT_LOG) ---"
+          cat "$PYTHON_OUTPUT_LOG" || echo "DEBUG: $PYTHON_OUTPUT_LOG (for full inference) is empty or unreadable."
+          echo "--- End of full inference.py output ---"
 
-          echo "DEBUG: inference.py exited with code $INFERENCE_EXIT_CODE"
-          echo "--- Start of inference.py output (from $PYTHON_OUTPUT_LOG) ---"
-          cat "$PYTHON_OUTPUT_LOG" || echo "DEBUG: $PYTHON_OUTPUT_LOG is empty or unreadable."
-          echo "--- End of inference.py output ---"
-
-          # Check for failure conditions
+          # Check for failure conditions for the full inference run
           FAILED=false
           FAILURE_REASON=""
 
           if [ $INFERENCE_EXIT_CODE -ne 0 ]; then
             FAILED=true
-            FAILURE_REASON="inference.py exited with non-zero code ($INFERENCE_EXIT_CODE)."
-          elif ! grep -qE ".+" "$PYTHON_OUTPUT_LOG"; then # Check if output log is empty
+            FAILURE_REASON="inference.py (full run) exited with non-zero code ($INFERENCE_EXIT_CODE)."
+          elif ! grep -qE ".+" "$PYTHON_OUTPUT_LOG"; then
             FAILED=true
-            FAILURE_REASON="Output log file '$PYTHON_OUTPUT_LOG' is empty."
+            FAILURE_REASON="Output log file '$PYTHON_OUTPUT_LOG' (for full run) is empty."
           elif grep -qF "$CRITICAL_ERROR_MSG_SHA" "$PYTHON_OUTPUT_LOG"; then
             FAILED=true
             FAILURE_REASON="Critical SHA256 error message found in output: '$CRITICAL_ERROR_MSG_SHA'"
-          elif grep -qF "$CRITICAL_ERROR_MSG_LOAD" "$PYTHON_OUTPUT_LOG"; then # Add more critical messages if needed
+          elif grep -qF "$CRITICAL_ERROR_MSG_LOAD" "$PYTHON_OUTPUT_LOG"; then
              FAILED=true
              FAILURE_REASON="Critical model load error message found in output: '$CRITICAL_ERROR_MSG_LOAD'"
           fi
           
-          # Example of checking for expected successful output (optional, adjust pattern as needed)
-          # For instance, if inference.py prints "✓ Text generation process completed." on success
-          # if [ "$FAILED" == "false" ] && ! grep -q "Text generation process completed" "$PYTHON_OUTPUT_LOG"; then
-          #   FAILED=true
-          #   FAILURE_REASON="Expected success message not found in inference output."
-          # fi
-
           if [ "$FAILED" == "true" ]; then
-            echo "❌ Inference test failed."
+            echo "❌ ERROR: Test failed at STEP 2 (full inference)."
             echo "   Reason: $FAILURE_REASON"
             exit 1
           fi
           
           OUTPUT_FOR_CI_LOG=$(head -c 200 "$PYTHON_OUTPUT_LOG" | tr -d '\n\r')
-          echo "✅ Inference test passed. Generated output sample (first 200 chars, no newlines): ${OUTPUT_FOR_CI_LOG}..."
+          echo "✅ INFO: STEP 2 (full inference) passed. Generated output sample (first 200 chars, no newlines): ${OUTPUT_FOR_CI_LOG}..."
 
+          set +x # Disable bash debug mode
+          
       - name: Cleanup Python Test Files
         if: always() # Ensures cleanup even if previous steps fail
         run: |
