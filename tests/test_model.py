@@ -164,18 +164,36 @@ def test_get_alibi_attention_bias(base_config: LunarisCodexConfig):
     alibi_bias = model.get_alibi_attention_bias(test_seq_len, device)
 
     assert alibi_bias.shape == (base_config.n_heads, test_seq_len, test_seq_len)
+
+    # Verificar comportamento do ALiBi corrigido
     for h_idx in range(base_config.n_heads):
         for i in range(test_seq_len):
             for j in range(test_seq_len):
                 if j > i:
+                    # Posições futuras devem ser -inf (causal mask)
                     assert alibi_bias[h_idx, i, j] == float('-inf')
                 else:
+                    # Posições válidas não devem ser -inf
                     assert alibi_bias[h_idx, i, j] != float('-inf')
+
+            # Posição atual deve ser 0.0 (i - i = 0)
             assert alibi_bias[h_idx, i, i] == 0.0
+
+            # Posições passadas devem ter valores baseados na distância
+            # Com a correção do ALiBi: slope * (i - j) onde i > j resulta em valores positivos
             if i > 0:
-                assert alibi_bias[h_idx, i, i-1] < 0.0
+                # Para i=1, j=0: slope * (1 - 0) = slope * 1 > 0
+                distance = i - (i-1)  # distance = 1
+                expected_bias = model.alibi_slopes[h_idx] * distance
+                assert torch.isclose(alibi_bias[h_idx, i, i-1], expected_bias, atol=1e-6)
+                assert alibi_bias[h_idx, i, i-1] > 0.0  # Deve ser positivo agora
+
                 if i > 1:
-                    assert alibi_bias[h_idx, i, i-2] < alibi_bias[h_idx, i, i-1]
+                    # Para posições mais distantes, o valor deve aumentar
+                    # i=2, j=0: slope * (2 - 0) = slope * 2
+                    # i=2, j=1: slope * (2 - 1) = slope * 1
+                    # slope * 2 > slope * 1, então alibi_bias[i, j=0] > alibi_bias[i, j=1]
+                    assert alibi_bias[h_idx, i, i-2] > alibi_bias[h_idx, i, i-1]
 
 @pytest.mark.parametrize("activation_fn_name", ["swiglu", "gelu"])
 def test_feed_forward_shape_and_activations(base_config: LunarisCodexConfig, dummy_input_tensor: torch.Tensor, activation_fn_name: str):
