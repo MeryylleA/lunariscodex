@@ -90,7 +90,7 @@ jobs:
         # para evitar duplicatas no Codecov.
         # Assumindo que env.PYTHON_VERSION no workflow principal (ci.yml) define sua versão Python primária.
         if: success() && matrix.os.name == 'ubuntu-latest' && inputs.python_version == '${{ env.PYTHON_VERSION }}' && secrets.CODECOV_TOKEN != ''
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-${{ matrix.os.name }}-${{ inputs.python_version }}.xml
