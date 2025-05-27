@@ -25,37 +25,42 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
     *   Easily toggled and configured for parameter-efficient adaptation.
 *   **Optimized Attention Mechanisms:**
     *   **ALiBi (Attention with Linear Biases):** Integrated for superior long-context handling.
-    *   **Optional FlashAttention:** Support for the `flash-attn` library for significant speedups on compatible NVIDIA GPUs.
+    *   **Optional FlashAttention:** Support for the `flash-attn` library for significant speedups on compatible NVIDIA GPUs (currently disabled by default due to custom ALiBi interaction).
     *   Robust PyTorch-native manual attention fallback ensuring correct ALiBi and padding mask handling.
-*   **Versatile Data Preprocessing (`prepare_data.py` v0.2.2):** <!-- Updated version -->
+*   **Versatile Data Preprocessing (`prepare_data.py` v0.2.2):**
     *   Comprehensive CLI for full control over data sourcing, tokenization, and processing.
     *   Processes Hugging Face Hub datasets (e.g., [Lunaris-Data](https://huggingface.co/datasets/meryyllebr543/lunaris-data)) with custom column mapping and formatting.
     *   Supports local text files (line-by-line, chunking, glob patterns).
-    *   Flexible tokenizer loading with automatic `pad_token_id` management and **enhanced, detailed logging** of tokenizer properties. <!-- Added detail -->
+    *   Flexible tokenizer loading with automatic `pad_token_id` management and **enhanced, detailed logging** of tokenizer properties.
     *   Saves to efficient memory-mapped NumPy files (`.memmap`).
     *   Features like `--overwrite_output` and explicit tokenizer/output path requirements.
-*   **Comprehensive Training Pipeline (`train.py`):**
+*   **Comprehensive and Enhanced Training Pipeline (`train.py`):**
     *   Extensive CLI configurability for all training aspects.
-    *   Supports training from scratch and resuming from checkpoints, with **improved logging for checkpoint state restoration**. <!-- Added detail -->
-    *   AdamW optimizer, gradient clipping, LR schedulers.
-    *   Automatic Mixed Precision (AMP) support (`fp16` or `bf16`) for CUDA.
-    *   Robust checkpointing (model, optimizer, scheduler, config, args) with "best model" saving.
-    *   Detailed metrics logging and `torch.compile` support.
-*   **Enhanced Text Generation/Inference (`inference.py` v0.2.0):**
+    *   Supports training from scratch and resuming from checkpoints, with improved logging for checkpoint state restoration and **enhanced checkpointing for reproducibility (Python, NumPy, PyTorch RNG states)**.
+    *   AdamW optimizer, gradient clipping.
+    *   **Flexible Learning Rate Schedulers:** Supports `ReduceLROnPlateau` and **`CosineAnnealingWarmRestarts`** for advanced LR control.
+    *   **Gradient Accumulation:** Enables simulation of larger batch sizes (via `--accumulation_steps`) to improve training stability on memory-constrained hardware (including CPU).
+    *   Automatic Mixed Precision (AMP) support (`fp16` or `bf16`) for CUDA via **`--mixed_precision_dtype`**.
+    *   Robust checkpointing (model, optimizer, scheduler, config, args, RNG states) with "best model" saving.
+    *   Detailed metrics logging.
+    *   **`torch.compile` support** via **`--use_torch_compile`** for significant speedups on compatible hardware.
+    *   Configurable **`--num_workers`** for `DataLoader` to optimize data loading.
+*   **Enhanced Text Generation/Inference (`inference.py` v0.3.0):** <!-- Consider updating version if changed -->
     *   Rich, colorful CLI using the `rich` library for formatted outputs, progress indicators, and model/parameter information display.
     *   Load trained models from checkpoints.
     *   Autoregressive text generation with configurable parameters (temperature, top-k, top-p, repetition penalty).
     *   Features prompt loading from files, output saving, and a `--no_color` option.
+    *   Interactive mode (`--interactive`) and streaming generation (`--stream`).
 *   **C++ Utility Toolkit:**
-    *   **`BpeProcessor` (v0.2.0 - Evolved!):** Formerly `bpe_trainer`. Now trains BPE models from a corpus *and* tokenizes text using a trained model. Enables creation and usage of fully custom tokenizers. <!-- MODIFIED -->
+    *   **`BpeProcessor` (v0.2.0 - Evolved!):** Formerly `bpe_trainer`. Now trains BPE models from a corpus *and* tokenizes text using a trained model. Enables creation and usage of fully custom tokenizers.
     *   **`lunaris_data_analyzer` (v0.2.0):** Inspects `.memmap` datasets, now with configurable `--pad_id`.
     *   **`lunaris_text_cleaner` (v0.3.5):** Cleans raw text, with improved multi-stage HTML cleaning.
 *   **Scalable and Tested:**
-    *   Full E2E pipeline (data prep → train → inference) demonstrated with toy models on CPU, including overfitting/fine-tuning tests and successful training runs on GPU (CUDA with AMP). <!-- MODIFIED -->
+    *   Full E2E pipeline (data prep → train → inference) demonstrated with toy models on CPU, and **successful training runs on high-end NVIDIA GPUs (e.g., RTX 5090, RTX 4070 Ti SUPER) with AMP.**
 *   **Continuous Integration (CI) & Automation:**
     *   A comprehensive GitHub Actions workflow (`ci.yml`) tests:
         *   Core Python pipeline (`prepare_data.py`, `train.py`, `inference.py` smoke test).
-        *   Compilation and functionality of C++ utilities (including `BpeProcessor` train and tokenize actions). <!-- MODIFIED -->
+        *   Compilation and functionality of C++ utilities (including `BpeProcessor` train and tokenize actions).
         *   `model.py` unit tests using `pytest`, with coverage reports sent to Codecov.io.
     *   Automated Pull Request management for the primary developer, including auto-merge on CI success.
     *   Dependabot integration for automated dependency updates.
@@ -120,6 +125,32 @@ This architecture aims to provide a robust and adaptable foundation for various 
 
 ---
 
+## GPU Compatibility & Testing
+
+Lunaris Codex is designed to leverage NVIDIA GPUs for accelerated training and inference. The pipeline has been successfully tested on the following architectures and specific cards:
+
+| GPU Architecture | Tested & Verified Models | Status                                  | Notes                                                                                                |
+| :--------------- | :----------------------- | :-------------------------------------- | :--------------------------------------------------------------------------------------------------- |
+| **NVIDIA Blackwell** | RTX 5090                 | ✅ **Verified Working**                 | Excellent performance with `bf16` precision and `torch.compile`. Tested via [Vast.ai](https://vast.ai/). |
+|                  | *RTX 5080 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested, but expected to work given architectural similarity to RTX 5090.                     |
+|                  | *RTX 5070 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested, but expected to work.                                                                      |
+|                  | *RTX 5060 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested, but expected to work.                                                                      |
+| **NVIDIA Ada Lovelace**| RTX 4070 Ti SUPER        | ✅ **Verified Working**                 | Good performance with `bf16`/`fp16` precision. Previous internal tests.                          |
+|                  | *RTX 4090 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested directly with current full pipeline, but expected to perform exceptionally well.         |
+|                  | *RTX 4080 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested, but expected to work.                                                                      |
+|                  | *RTX 4070 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested, but expected to work.                                                                      |
+|                  | *RTX 4060 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested, but expected to work.                                                                      |
+
+**Key:**
+*   ✅ **Verified Working:** Successfully run the full training pipeline or significant portions.
+*   ⚙️ *Highly Likely Compatible:* Not explicitly tested by the project maintainer, but compatibility is expected based on architectural similarities and PyTorch support. Users are encouraged to report their experiences.
+
+We aim for broad compatibility with modern NVIDIA GPUs supporting recent CUDA versions and PyTorch. For optimal performance, especially with `bf16` precision (via `--mixed_precision_dtype`) and `torch.compile` (via `--use_torch_compile`), GPUs from the Ada Lovelace (RTX 40-series) and Blackwell (RTX 50-series) generations are recommended.
+
+**Note on FlashAttention:** While the model architecture includes optional support for FlashAttention, it is currently disabled by default due to incompatibilities with the custom ALiBi implementation. The PyTorch native attention mechanism is used.
+
+---
+
 ## Getting Started
 
 This section outlines the basic steps to get Lunaris Codex up and running. Note that training effective Large Language Models typically requires substantial datasets and computational resources.
@@ -172,9 +203,9 @@ python prepare_data.py \
 
 ### 3. Training (`train.py`)
 
-Train your Lunaris Codex model. The example below is for a small model; refer to our [Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines) on the Wiki for information on training larger models.
+Train your Lunaris Codex model. The example below is for a small model on CPU. For GPU training, ensure CUDA and compatible PyTorch are installed, and utilize flags like `--device cuda`, `--mixed_precision_dtype bf16`, `--use_torch_compile`, and adjust `--batch_size` accordingly. The script now also supports **gradient accumulation** (via `--accumulation_steps`) and **cosine annealing learning rate schedulers** (via `--lr_scheduler_type cosine_warm_restarts`).
 
-**Example: Training a small test model on CPU with LoRA:**
+**Example: Training a small test model on CPU with LoRA (showcasing some new flags):**
 ```bash
 python train.py \
     --memmap_file_train ./processed_data/lunaris_data_sample.memmap \
@@ -183,14 +214,20 @@ python train.py \
     --dataset_max_length 1024 \
     --model_max_seq_len 1024 \
     --d_model 256 --n_layers 4 --n_heads 4 \
-    --batch_size 4 --num_epochs 1 \
+    --batch_size 4 \
+    --accumulation_steps 2 \ # Effective batch size = 8
+    --num_epochs 1 \
+    --learning_rate 1e-4 \
+    --lr_scheduler_type cosine_warm_restarts \
+    --cosine_t_0 125 \ # Calculated as ceil(num_train_sequences / (batch_size * accumulation_steps)) for one epoch
     --lora_rank 8 \
     --device cpu \
-    --checkpoint_dir ./checkpoints_tutorial
+    --checkpoint_dir ./checkpoints_tutorial \
+    --num_workers 2 # Example for potential CPU data loading speedup
 ```
-*For full training options, see the [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) page on our Wiki or run `python train.py --help`.*
+*For full training options, including new arguments for gradient accumulation and schedulers, see the [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) page on our Wiki or run `python train.py --help`.*
 
-### 4. Running Inference (`inference.py` v0.3.0)
+### 4. Running Inference (`inference.py` v0.3.0) <!-- Mantive v0.3.0, ajuste se necessário -->
 
 Generate text with your trained model using the enhanced `inference.py` script, featuring a rich, colorful command-line interface with advanced functionality.
 
@@ -219,7 +256,7 @@ python inference.py \
 ### 5. Using C++ Utilities (Optional)
 Helper tools for data analysis, text cleaning, and custom BPE tokenization are available. Each utility is located in its own directory (e.g., `bpe_trainer/` for `BpeProcessor`, `text_cleaner/`, `data_analyzer/`) and includes a `README.md` with specific compilation and usage instructions. They can also be compiled using the main `Makefile` at the root of the repository (e.g., `make bpe_processor`).
 
-*   **`BpeProcessor`**: (Located in `bpe_trainer/`) Trains BPE models from a corpus and tokenizes text using these custom models. <!-- MODIFIED -->
+*   **`BpeProcessor`**: (Located in `bpe_trainer/`) Trains BPE models from a corpus and tokenizes text using these custom models.
 *   **`lunaris_text_cleaner`**: Cleans raw text files before tokenization. (Located in `text_cleaner/`)
 *   **`lunaris_data_analyzer`**: Inspects and validates `.memmap` dataset files. (Located in `data_analyzer/`)
 
@@ -233,7 +270,7 @@ Key pages include:
 *   **[Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines)**
 *   [Data Preparation Pipeline](https://github.com/MeryylleA/lunariscodex/wiki/Data-Preparation-Pipeline) (`prepare_data.py`)
 *   [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) (`train.py`)
-*   [Utility: BPE Processor](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-BPE-Processor) **(Updated!)** <!-- MODIFIED & ASSUMING WIKI PAGE NAME CHANGE -->
+*   [Utility: BPE Processor](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-BPE-Processor)
 *   [Utility: Lunaris Text Cleaner](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Text-Cleaner)
 *   [Utility: Lunaris Data Analyzer](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Data-Analyzer)
 *   [Tutorial: Training Your First Model](https://github.com/MeryylleA/lunariscodex/wiki/Training-Your-First-Model)
@@ -244,13 +281,14 @@ Key pages include:
 ## Roadmap
 
 Our current focus and future plans include:
-*   **Finalize and fully integrate the `BpeProcessor` (custom BPE tokenizer) with `prepare_data.py`, allowing native use of custom-trained tokenizers.** <!-- REPHRASED AND HIGHLIGHTED -->
-*   **Implement detokenization functionality in `BpeProcessor`.** <!-- NEW/SPECIFIC -->
+*   **Finalize and fully integrate the `BpeProcessor` (custom BPE tokenizer) with `prepare_data.py`, allowing native use of custom-trained tokenizers.**
+*   **Implement detokenization functionality in `BpeProcessor`.**
 *   Enhancing `lunaris_data_analyzer` with token decoding capabilities.
 *   Increasing unit test coverage for `model.py`.
 *   Developing a dedicated evaluation script (`evaluate.py`).
 *   Further enhancing `inference.py` (interactive mode, batch generation, etc.).
 *   Expanding documentation: advanced tutorials, API reference.
+*   Further optimize training on various GPU architectures.
 *   (Ambitious) Releasing small to medium pretrained base models if resources permit.
 
 ---
