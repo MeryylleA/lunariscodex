@@ -27,7 +27,7 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
     *   **ALiBi (Attention with Linear Biases):** Integrated for superior long-context handling.
     *   **Optional FlashAttention:** Support for the `flash-attn` library for significant speedups on compatible NVIDIA GPUs (currently disabled by default due to custom ALiBi interaction).
     *   Robust PyTorch-native manual attention fallback ensuring correct ALiBi and padding mask handling.
-*   **Versatile Data Preprocessing (`prepare_data.py` v0.2.2):**
+*   **Versatile Data Preprocessing (`prepare_data.py` v0.3.0):**
     *   Comprehensive CLI for full control over data sourcing, tokenization, and processing.
     *   Processes Hugging Face Hub datasets (e.g., [Lunaris-Data](https://huggingface.co/datasets/meryyllebr543/lunaris-data)) with custom column mapping and formatting.
     *   Supports local text files (line-by-line, chunking, glob patterns).
