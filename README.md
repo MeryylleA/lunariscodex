@@ -2,6 +2,7 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MeryylleA/lunariscodex)
 [![codecov](https://codecov.io/gh/MeryylleA/lunariscodex/branch/main/graph/badge.svg?token=6FHOG5S0HQ)](https://codecov.io/gh/MeryylleA/lunariscodex)
 ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/MeryylleA/lunariscodex?utm_source=oss&utm_medium=github&utm_campaign=MeryylleA%2Flunariscodex&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 # Lunaris Codex
 
@@ -45,7 +46,7 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
     *   Detailed metrics logging.
     *   **`torch.compile` support** via **`--use_torch_compile`** for significant speedups on compatible hardware.
     *   Configurable **`--num_workers`** for `DataLoader` to optimize data loading.
-*   **Enhanced Text Generation/Inference (`inference.py` v0.3.0):** <!-- Consider updating version if changed -->
+*   **Enhanced Text Generation/Inference (`inference.py` v0.3.6):** <!-- Consider updating version if changed -->
     *   Rich, colorful CLI using the `rich` library for formatted outputs, progress indicators, and model/parameter information display.
     *   Load trained models from checkpoints.
     *   Autoregressive text generation with configurable parameters (temperature, top-k, top-p, repetition penalty).
@@ -227,7 +228,7 @@ python train.py \
 ```
 *For full training options, including new arguments for gradient accumulation and schedulers, see the [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) page on our Wiki or run `python train.py --help`.*
 
-### 4. Running Inference (`inference.py` v0.3.0) <!-- Mantive v0.3.0, ajuste se necessário -->
+### 4. Running Inference (`inference.py` v0.3.6)
 
 Generate text with your trained model using the enhanced `inference.py` script, featuring a rich, colorful command-line interface with advanced functionality.
 
