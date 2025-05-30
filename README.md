@@ -21,6 +21,7 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
     *   Highly configurable: number of layers, hidden dimensions, attention heads, activation functions (SwiGLU, GELU), and more.
     *   Implements modern components such as Pre-Layer Normalization and LayerScale for better training stability.
     *   Features tied input embedding and output language modeling head for improved parameter efficiency.
+    *   Implemented KV Caching for significantly optimized token generation during inference.
 *   **Efficient Fine-tuning with LoRA (`LoRALinear`):**
     *   Built-in support for Low-Rank Adaptation via a custom `LoRALinear` layer.
     *   Easily toggled and configured for parameter-efficient adaptation.
@@ -46,12 +47,15 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
     *   Detailed metrics logging.
     *   **`torch.compile` support** via **`--use_torch_compile`** for significant speedups on compatible hardware.
     *   Configurable **`--num_workers`** for `DataLoader` to optimize data loading.
-*   **Enhanced Text Generation/Inference (`inference.py` v0.3.6):** <!-- Consider updating version if changed -->
+*   **Enhanced Text Generation/Inference (`inference.py` v0.3.9):** <!-- Consider updating version if changed -->
     *   Rich, colorful CLI using the `rich` library for formatted outputs, progress indicators, and model/parameter information display.
     *   Load trained models from checkpoints.
     *   Autoregressive text generation with configurable parameters (temperature, top-k, top-p, repetition penalty).
     *   Features prompt loading from files, output saving, and a `--no_color` option.
     *   Interactive mode (`--interactive`) and streaming generation (`--stream`).
+    *   Integrated KV Caching for substantially faster inference, including efficient cache management in `stream_generation` and `interactive_mode`.
+    *   Fixed a `TypeError` in `interactive_mode` related to `rich.Text.assemble` for smoother user interaction.
+    *   Revised and translated all comments in `inference.py` to English for better clarity and maintainability.
 *   **C++ Utility Toolkit:**
     *   **`BpeProcessor` (v0.2.0 - Evolved!):** Formerly `bpe_trainer`. Now trains BPE models from a corpus *and* tokenizes text using a trained model. Enables creation and usage of fully custom tokenizers.
     *   **`lunaris_data_analyzer` (v0.2.0):** Inspects `.memmap` datasets, now with configurable `--pad_id`.
@@ -71,7 +75,7 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
 
 Lunaris Codex implements a standard decoder-only Transformer architecture with several modern enhancements:
 *   **Transformer Blocks:** A stack of `n_layers` identical decoder blocks using Pre-LayerNorm.
-*   **Self-Attention:** Multi-Head Attention with integrated ALiBi. Features optional FlashAttention (CUDA) and a PyTorch-native fallback. LoRA can be applied.
+*   **Self-Attention:** Multi-Head Attention with integrated ALiBi. Features optional FlashAttention (CUDA) and a PyTorch-native fallback. LoRA can be applied. The self-attention mechanism now also supports KV Caching to optimize generation speed.
 *   **FeedForward Network (FFN):** Position-wise FFN with configurable SwiGLU/GELU activation and LoRA-compatible linear layers.
 *   **Stability:** LayerScale is applied to sub-layer outputs.
 *   **Embeddings:** Tied token embedding and language modeling head.
@@ -90,23 +94,29 @@ The Lunaris model is a sophisticated Transformer-based decoder architecture desi
 
 *   **`LoRALinear`**: Lunaris integrates Low-Rank Adaptation (LoRA) through this class. `LoRALinear` layers are used in place of standard linear layers within the attention and feed-forward network components. This allows for efficient fine-tuning by significantly reducing the number of trainable parameters, as only the LoRA adapter weights are typically updated.
 
-*   **`LunarisMind`**: This is the main class that encapsulates the entire Lunaris model. It orchestrates the various parts of the architecture, including:
+*   **`LunarisMind`**: This is the main class that encapsulates the entire Lunaris model. Its `forward` method now accepts an optional `past_key_values` argument (a list of tuples, one for each layer, containing past K and V tensors) and a `use_cache` boolean flag. It orchestrates the various parts of the architecture, including:
     *   Token Embeddings: Input tokens are converted into dense vector representations.
-    *   A stack of `TransformerDecoderBlock` layers.
+    *   A stack of `TransformerDecoderBlock` layers, to which `past_key_values` (if provided) and `use_cache` are passed.
     *   A final layer normalization step.
     *   A tied language modeling head, where the output linear layer shares weights with the token embedding layer. This is a common technique to reduce model size and improve performance.
+    When `use_cache` is true, the `forward` method returns a tuple containing `logits` and `present_key_values_all_layers` (the updated KV cache state for all layers). Otherwise, it returns only `logits`.
 
-*   **`TransformerDecoderBlock`**: Each decoder block is a fundamental building unit of the Lunaris model. It consists of:
+    The `generate` method of `LunarisMind` is responsible for autoregressive text generation and has been refactored to leverage KV Caching for efficiency. Initially, `past_key_values` is `None`. In the first step (processing the input prompt), `self.forward` is called with `use_cache=True` and the full `input_ids` of the prompt. This call populates the `past_key_values` cache. For all subsequent generation steps, `self.forward` is called with `use_cache=True`, but `input_ids` contains only the token generated in the immediately preceding step, and the `past_key_values` from the previous iteration are passed in. The `attention_mask` is managed within the `generate` method; it is created to cover the full sequence length (prompt + already generated tokens) and passed to `self.forward` in each step. Similarly, the `alibi_combined_bias` (if ALiBi is used) is calculated within `self.forward` based on the current total sequence length, which is implicitly managed by the growing cache and the updated attention mask.
+
+*   **`TransformerDecoderBlock`**: Each decoder block is a fundamental building unit of the Lunaris model. Its `forward` method has been updated to accept an optional `past_key_value` (for the current block) and the `use_cache` flag. It consists of:
     *   Layer Normalization: Applied before the self-attention and feed-forward sub-layers.
-    *   `SelfAttention`: The attention mechanism.
+    *   `SelfAttention`: The attention mechanism, which now receives `past_key_value` and returns the updated `present_key_value` if `use_cache` is true.
     *   `FeedForward`: A position-wise feed-forward network.
     *   Dropout: Applied for regularization.
     *   Optional LayerScale: For larger model configurations, LayerScale is used to stabilize training by adaptively scaling the outputs of residual connections.
+    If `use_cache` is true, the block's `forward` method returns the transformer block's output tensor and the `present_key_value` from the `SelfAttention` layer. Otherwise, it returns only the block's output tensor.
 
-*   **`SelfAttention`**: This module implements multi-head self-attention.
+*   **`SelfAttention`**: This module implements multi-head self-attention. Its `forward` method has been modified to accept an optional `past_key_value` argument (a tuple containing the K and V tensors from the previous state for this layer).
+    *   If `past_key_value` is provided, the current Key (K) and Value (V) tensors (computed from the input `hidden_states`) are concatenated with the respective K and V tensors from `past_key_value` along the sequence length dimension. This forms the full K and V context for attention calculation.
     *   It uses `LoRALinear` for its query, key, value, and output projection layers.
     *   A key feature is its **custom ALiBi (Attention with Linear Biases) implementation**. ALiBi provides an alternative to traditional positional embeddings by directly biasing attention scores based on token distance. The custom implementation in Lunaris ensures correct ALiBi application even with a variable number of attention heads.
     *   Notably, **Flash Attention is explicitly disabled** if available. This decision is due to incompatibilities between standard Flash Attention implementations and the precise biasing required by the custom ALiBi mechanism. The model defaults to a PyTorch standard attention implementation to ensure the integrity of ALiBi.
+    The `forward` method now returns a tuple: the attention output tensor and `present_key_value` (a tuple of the new K and V state for this layer, which includes past and current states).
 
 *   **`FeedForward`**: This module is a standard position-wise feed-forward network, typically consisting of two linear transformations with an activation function in between.
     *   It uses `LoRALinear` for its linear layers.
@@ -228,7 +238,7 @@ python train.py \
 ```
 *For full training options, including new arguments for gradient accumulation and schedulers, see the [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) page on our Wiki or run `python train.py --help`.*
 
-### 4. Running Inference (`inference.py` v0.3.6)
+### 4. Running Inference (`inference.py` v0.3.9)
 
 Generate text with your trained model using the enhanced `inference.py` script, featuring a rich, colorful command-line interface with advanced functionality.
 
