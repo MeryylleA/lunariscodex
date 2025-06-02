@@ -38,7 +38,7 @@ Key DDP features implemented:
 *   **Advanced Decoder-only Transformer Architecture (`model.py`):**
     *   Optimized for both code and natural language tasks.
     *   Highly configurable: number of layers, hidden dimensions, attention heads, activation functions (SwiGLU, GELU), and more.
-    *   Implements modern components such as Pre-Layer Normalization and LayerScale for better training stability.
+    *   Implements modern components such as Pre-Layer Normalization and LayerScale for enhanced training stability.
     *   Features tied input embedding and output language modeling head for improved parameter efficiency.
     *   Implemented KV Caching for significantly optimized token generation during inference.
 
@@ -81,7 +81,7 @@ Key DDP features implemented:
     *   **`lunaris_text_cleaner` (v0.3.5):** Advanced text cleaning with multi-stage HTML processing.
 
 *   **Production-Ready & Tested:**
-    *   Full E2E pipeline demonstrated with successful multi-GPU training runs on high-end NVIDIA GPUs
+    *   Full end-to-end pipeline demonstrated with successful multi-GPU training runs on high-end NVIDIA GPUs
     *   Comprehensive CI/CD with automated testing and dependency management
     *   Extensive documentation and community support
 
@@ -150,14 +150,13 @@ Prepare your dataset using `prepare_data.py`. For production training, use datas
 ```bash
 python prepare_data.py \
     --data_source_type hf_dataset \
-    --dataset_name_or_path meryyllebr543/lunaris-data \
-    --tokenizer_name_or_path bigcode/starcoder \
-    --output_path ./processed_data/lunaris_data.memmap \
-    --hf_dataset_data_dir data \
-    --hf_input_column input \
-    --hf_target_column output \
-    --hf_formatting_template "USER: {input}\nASSISTANT: {target}" \
-    --max_length 1024 \
+    --dataset_name_or_path allenai/dolma \
+    --hf_dataset_config_name v1_7 \
+    --hf_single_content_column text \
+    --tokenizer_name_or_path google/gemma-2b \
+    --output_path ./processed_data/dolma_sample_gemma2b.memmap \
+    --max_length 2048 \
+    --max_examples 100000 \
     --add_special_tokens \
     --overwrite_output
 ```
@@ -171,11 +170,11 @@ Launch distributed training using `torchrun` for optimal performance:
 ```bash
 # Example: Training on a single machine with 2 GPUs
 torchrun --standalone --nproc_per_node=2 train.py \
-    --memmap_file_train ./processed_data/lunaris_data.memmap \
+    --memmap_file_train ./processed_data/dolma_sample_gemma2b.memmap \
     --num_sequences_train 100000 \
-    --tokenizer_name_or_path bigcode/starcoder \
-    --dataset_max_length 1024 \
-    --model_max_seq_len 1024 \
+    --tokenizer_name_or_path google/gemma-2b \
+    --dataset_max_length 2048 \
+    --model_max_seq_len 2048 \
     --d_model 512 --n_layers 8 --n_heads 8 \
     --batch_size 8 \
     --accumulation_steps 4 \
@@ -198,7 +197,7 @@ torchrun --standalone --nproc_per_node=2 train.py \
 For single-GPU or CPU training, use the standard command:
 ```bash
 python train.py \
-    --memmap_file_train ./processed_data/lunaris_data.memmap \
+    --memmap_file_train ./processed_data/dolma_sample_gemma2b.memmap \
     --device cuda \
     # ... other arguments
 ```
@@ -216,12 +215,11 @@ Generate text with your trained model using the feature-rich `inference.py`:
 ```bash
 python inference.py \
     --checkpoint_path ./checkpoints_ddp/best_model.pt \
-    --tokenizer_name_or_path bigcode/starcoder \
-    --prompt "USER: Write a Python function that calculates factorial.\nASSISTANT:" \
+    --tokenizer_name_or_path google/gemma-2b \
+    --prompt "George Washington" \
     --max_new_tokens 200 \
-    --temperature 0.7 \
-    --stream \
-    --syntax_highlight python
+    --temperature 0.6 \
+    --stream
 ```
 
 **Advanced Features:**
@@ -230,7 +228,7 @@ python inference.py \
 - `--syntax_highlight`: Code syntax highlighting
 - `--prompt_file`: Load prompts from file
 - `--output_file`: Save generated text
-- 
+
 ---
 
 ## Documentation & Wiki
