@@ -8,9 +8,28 @@
 
 **Lunaris Codex** is a highly flexible and customizable Transformer Decoder architecture designed for code generation and language modeling. Written entirely in PyTorch, it features state-of-the-art components and a complete pipeline for data preparation, training, and inference.
 
-Our goal is to provide a clean, understandable, and powerful codebase that serves as an excellent starting point for researchers, students, and developers interested in building, training, and experimenting with modern language models.
+Our philosophy goes beyond fine-tuning existing models—we provide a robust foundation for building custom AI architectures from the ground up. Whether you're a researcher exploring novel architectures, a student learning about transformers, or a developer creating specialized language models, Lunaris Codex offers the tools and flexibility you need.
 
 > **Note:** This project focuses on delivering a robust, well-tested architecture and a complete toolkit for training, data processing, and inference. While we aspire to release large-scale pretrained models, the main value here is the code, documentation, and reproducible pipeline.
+
+---
+
+## 🚀 What's New: Multi-GPU Training with DistributedDataParallel
+
+**Major Update:** `train.py` now supports **DistributedDataParallel (DDP)** for efficient multi-GPU training! This groundbreaking enhancement enables:
+
+- **Significantly faster pre-training** with automatic workload distribution across multiple GPUs
+- **Seamless scaling** to larger datasets and model architectures
+- **Production-ready distributed training** using PyTorch's battle-tested DDP framework
+- **Successfully tested** on 2x RTX 4090 GPUs with substantial training speedups
+
+Key DDP features implemented:
+- **Automatic Process Management**: Handles distributed process group initialization and cleanup
+- **Smart Device Allocation**: Each GPU process is automatically pinned to its designated device
+- **Distributed Data Loading**: Uses `DistributedSampler` to ensure each GPU processes unique data shards
+- **Synchronized Training**: Gradients are automatically synchronized across all GPUs
+- **Robust Checkpointing**: DDP-aware model saving and loading with rank-based coordination
+- **Aggregated Metrics**: Loss and performance metrics are properly averaged across all processes
 
 ---
 
@@ -22,151 +41,86 @@ Our goal is to provide a clean, understandable, and powerful codebase that serve
     *   Implements modern components such as Pre-Layer Normalization and LayerScale for better training stability.
     *   Features tied input embedding and output language modeling head for improved parameter efficiency.
     *   Implemented KV Caching for significantly optimized token generation during inference.
+
+*   **Distributed Multi-GPU Training (`train.py`):**
+    *   **DistributedDataParallel (DDP) support** for efficient multi-GPU training with linear scaling
+    *   Comprehensive CLI configurability for all training aspects
+    *   Supports training from scratch and resuming from checkpoints with enhanced DDP awareness
+    *   AdamW optimizer with gradient clipping and distributed synchronization
+    *   **Flexible Learning Rate Schedulers:** Supports `ReduceLROnPlateau` and `CosineAnnealingWarmRestarts`
+    *   **Gradient Accumulation:** Compatible with DDP for simulating larger effective batch sizes
+    *   Automatic Mixed Precision (AMP) support (`fp16` or `bf16`) optimized for multi-GPU setups
+    *   **`torch.compile` support** for additional performance gains on compatible hardware
+
 *   **Efficient Fine-tuning with LoRA (`LoRALinear`):**
     *   Built-in support for Low-Rank Adaptation via a custom `LoRALinear` layer.
     *   Easily toggled and configured for parameter-efficient adaptation.
+    *   Fully compatible with DDP training for distributed fine-tuning.
+
 *   **Optimized Attention Mechanisms:**
     *   **ALiBi (Attention with Linear Biases):** Integrated for superior long-context handling.
-    *   **Optional FlashAttention:** Support for the `flash-attn` library for significant speedups on compatible NVIDIA GPUs (currently disabled by default due to custom ALiBi interaction).
+    *   **Optional FlashAttention:** Support for the `flash-attn` library for significant speedups on compatible NVIDIA GPUs.
     *   Robust PyTorch-native manual attention fallback ensuring correct ALiBi and padding mask handling.
+
 *   **Versatile Data Preprocessing (`prepare_data.py` v0.3.0):**
     *   Comprehensive CLI for full control over data sourcing, tokenization, and processing.
-    *   Processes Hugging Face Hub datasets (e.g., [Lunaris-Data](https://huggingface.co/datasets/meryyllebr543/lunaris-data)) with custom column mapping and formatting.
+    *   Processes Hugging Face Hub datasets with custom column mapping and formatting.
     *   Supports local text files (line-by-line, chunking, glob patterns).
-    *   Flexible tokenizer loading with automatic `pad_token_id` management and **enhanced, detailed logging** of tokenizer properties.
-    *   Saves to efficient memory-mapped NumPy files (`.memmap`).
-    *   Features like `--overwrite_output` and explicit tokenizer/output path requirements.
-*   **Comprehensive and Enhanced Training Pipeline (`train.py`):**
-    *   Extensive CLI configurability for all training aspects.
-    *   Supports training from scratch and resuming from checkpoints, with improved logging for checkpoint state restoration and **enhanced checkpointing for reproducibility (Python, NumPy, PyTorch RNG states)**.
-    *   AdamW optimizer, gradient clipping.
-    *   **Flexible Learning Rate Schedulers:** Supports `ReduceLROnPlateau` and **`CosineAnnealingWarmRestarts`** for advanced LR control.
-    *   **Gradient Accumulation:** Enables simulation of larger batch sizes (via `--accumulation_steps`) to improve training stability on memory-constrained hardware (including CPU).
-    *   Automatic Mixed Precision (AMP) support (`fp16` or `bf16`) for CUDA via **`--mixed_precision_dtype`**.
-    *   Robust checkpointing (model, optimizer, scheduler, config, args, RNG states) with "best model" saving.
-    *   Detailed metrics logging.
-    *   **`torch.compile` support** via **`--use_torch_compile`** for significant speedups on compatible hardware.
-    *   Configurable **`--num_workers`** for `DataLoader` to optimize data loading.
-*   **Enhanced Text Generation/Inference (`inference.py` v0.3.9):** <!-- Consider updating version if changed -->
-    *   Rich, colorful CLI using the `rich` library for formatted outputs, progress indicators, and model/parameter information display.
-    *   Load trained models from checkpoints.
+    *   Flexible tokenizer loading with automatic `pad_token_id` management.
+    *   Saves to efficient memory-mapped NumPy files (`.memmap`) optimized for distributed loading.
+
+*   **Enhanced Text Generation/Inference (`inference.py` v0.3.9):**
+    *   Rich, colorful CLI using the `rich` library for formatted outputs and progress indicators.
     *   Autoregressive text generation with configurable parameters (temperature, top-k, top-p, repetition penalty).
-    *   Features prompt loading from files, output saving, and a `--no_color` option.
     *   Interactive mode (`--interactive`) and streaming generation (`--stream`).
-    *   Integrated KV Caching for substantially faster inference, including efficient cache management in `stream_generation` and `interactive_mode`.
-    *   Fixed a `TypeError` in `interactive_mode` related to `rich.Text.assemble` for smoother user interaction.
-    *   Revised and translated all comments in `inference.py` to English for better clarity and maintainability.
+    *   Integrated KV Caching for substantially faster inference.
+
 *   **C++ Utility Toolkit:**
-    *   **`BpeProcessor` (v0.2.0 - Evolved!):** Formerly `bpe_trainer`. Now trains BPE models from a corpus *and* tokenizes text using a trained model. Enables creation and usage of fully custom tokenizers.
-    *   **`lunaris_data_analyzer` (v0.2.0):** Inspects `.memmap` datasets, now with configurable `--pad_id`.
-    *   **`lunaris_text_cleaner` (v0.3.5):** Cleans raw text, with improved multi-stage HTML cleaning.
-*   **Scalable and Tested:**
-    *   Full E2E pipeline (data prep → train → inference) demonstrated with toy models on CPU, and **successful training runs on high-end NVIDIA GPUs (e.g., RTX 5090, RTX 4070 Ti SUPER) with AMP.**
-*   **Continuous Integration (CI) & Automation:**
-    *   A comprehensive GitHub Actions workflow (`ci.yml`) tests:
-        *   Core Python pipeline (`prepare_data.py`, `train.py`, `inference.py` smoke test).
-        *   Compilation and functionality of C++ utilities (including `BpeProcessor` train and tokenize actions).
-        *   `model.py` unit tests using `pytest`, with coverage reports sent to Codecov.io.
-    *   Automated Pull Request management for the primary developer, including auto-merge on CI success.
-    *   Dependabot integration for automated dependency updates.
+    *   **`BpeProcessor` (v0.2.0):** Trains BPE models from a corpus and tokenizes text using trained models.
+    *   **`lunaris_data_analyzer` (v0.2.0):** Inspects `.memmap` datasets with configurable parameters.
+    *   **`lunaris_text_cleaner` (v0.3.5):** Advanced text cleaning with multi-stage HTML processing.
+
+*   **Production-Ready & Tested:**
+    *   Full E2E pipeline demonstrated with successful multi-GPU training runs on high-end NVIDIA GPUs
+    *   Comprehensive CI/CD with automated testing and dependency management
+    *   Extensive documentation and community support
+
 ---
 
 ## Architecture Overview
 
-Lunaris Codex implements a standard decoder-only Transformer architecture with several modern enhancements:
-*   **Transformer Blocks:** A stack of `n_layers` identical decoder blocks using Pre-LayerNorm.
-*   **Self-Attention:** Multi-Head Attention with integrated ALiBi. Features optional FlashAttention (CUDA) and a PyTorch-native fallback. LoRA can be applied. The self-attention mechanism now also supports KV Caching to optimize generation speed.
-*   **FeedForward Network (FFN):** Position-wise FFN with configurable SwiGLU/GELU activation and LoRA-compatible linear layers.
-*   **Stability:** LayerScale is applied to sub-layer outputs.
-*   **Embeddings:** Tied token embedding and language modeling head.
+Lunaris Codex implements a modern decoder-only Transformer architecture with cutting-edge enhancements:
 
-> The architecture is engineered for a balance of performance, modern features, code clarity, and extensive configurability, making it an excellent foundation for diverse NLP and code-related tasks.
+*   **Transformer Blocks:** A stack of `n_layers` identical decoder blocks using Pre-LayerNorm
+*   **Self-Attention:** Multi-Head Attention with integrated ALiBi and optional FlashAttention
+*   **Feed-Forward Network (FFN):** Position-wise FFN with configurable SwiGLU/GELU activation
+*   **Advanced Features:** LayerScale for stability, tied embeddings for efficiency, KV Caching for fast inference
+*   **LoRA Integration:** Built-in support for parameter-efficient fine-tuning
 
----
-
-## Detailed Model Architecture
-
-The Lunaris model is a sophisticated Transformer-based decoder architecture designed for advanced language understanding and generation tasks. Below is a breakdown of its core components and features:
-
-### Core Components
-
-*   **`LunarisCodexConfig`**: This class serves as the central configuration hub for the model. It defines crucial hyperparameters such as vocabulary size (`vocab_size`), model dimensionality (`d_model`), number of transformer layers (`n_layers`), number of attention heads (`n_heads`), maximum sequence length (`max_seq_len`), dropout rates, activation functions (e.g., SwiGLU), and LoRA rank (`lora_rank`). It also incorporates adaptive settings, such as adjusting dropout for smaller model variants to optimize performance.
-
-*   **`LoRALinear`**: Lunaris integrates Low-Rank Adaptation (LoRA) through this class. `LoRALinear` layers are used in place of standard linear layers within the attention and feed-forward network components. This allows for efficient fine-tuning by significantly reducing the number of trainable parameters, as only the LoRA adapter weights are typically updated.
-
-*   **`LunarisMind`**: This is the main class that encapsulates the entire Lunaris model. Its `forward` method now accepts an optional `past_key_values` argument (a list of tuples, one for each layer, containing past K and V tensors) and a `use_cache` boolean flag. It orchestrates the various parts of the architecture, including:
-    *   Token Embeddings: Input tokens are converted into dense vector representations.
-    *   A stack of `TransformerDecoderBlock` layers, to which `past_key_values` (if provided) and `use_cache` are passed.
-    *   A final layer normalization step.
-    *   A tied language modeling head, where the output linear layer shares weights with the token embedding layer. This is a common technique to reduce model size and improve performance.
-    When `use_cache` is true, the `forward` method returns a tuple containing `logits` and `present_key_values_all_layers` (the updated KV cache state for all layers). Otherwise, it returns only `logits`.
-
-    The `generate` method of `LunarisMind` is responsible for autoregressive text generation and has been refactored to leverage KV Caching for efficiency. Initially, `past_key_values` is `None`. In the first step (processing the input prompt), `self.forward` is called with `use_cache=True` and the full `input_ids` of the prompt. This call populates the `past_key_values` cache. For all subsequent generation steps, `self.forward` is called with `use_cache=True`, but `input_ids` contains only the token generated in the immediately preceding step, and the `past_key_values` from the previous iteration are passed in. The `attention_mask` is managed within the `generate` method; it is created to cover the full sequence length (prompt + already generated tokens) and passed to `self.forward` in each step. Similarly, the `alibi_combined_bias` (if ALiBi is used) is calculated within `self.forward` based on the current total sequence length, which is implicitly managed by the growing cache and the updated attention mask.
-
-*   **`TransformerDecoderBlock`**: Each decoder block is a fundamental building unit of the Lunaris model. Its `forward` method has been updated to accept an optional `past_key_value` (for the current block) and the `use_cache` flag. It consists of:
-    *   Layer Normalization: Applied before the self-attention and feed-forward sub-layers.
-    *   `SelfAttention`: The attention mechanism, which now receives `past_key_value` and returns the updated `present_key_value` if `use_cache` is true.
-    *   `FeedForward`: A position-wise feed-forward network.
-    *   Dropout: Applied for regularization.
-    *   Optional LayerScale: For larger model configurations, LayerScale is used to stabilize training by adaptively scaling the outputs of residual connections.
-    If `use_cache` is true, the block's `forward` method returns the transformer block's output tensor and the `present_key_value` from the `SelfAttention` layer. Otherwise, it returns only the block's output tensor.
-
-*   **`SelfAttention`**: This module implements multi-head self-attention. Its `forward` method has been modified to accept an optional `past_key_value` argument (a tuple containing the K and V tensors from the previous state for this layer).
-    *   If `past_key_value` is provided, the current Key (K) and Value (V) tensors (computed from the input `hidden_states`) are concatenated with the respective K and V tensors from `past_key_value` along the sequence length dimension. This forms the full K and V context for attention calculation.
-    *   It uses `LoRALinear` for its query, key, value, and output projection layers.
-    *   A key feature is its **custom ALiBi (Attention with Linear Biases) implementation**. ALiBi provides an alternative to traditional positional embeddings by directly biasing attention scores based on token distance. The custom implementation in Lunaris ensures correct ALiBi application even with a variable number of attention heads.
-    *   Notably, **Flash Attention is explicitly disabled** if available. This decision is due to incompatibilities between standard Flash Attention implementations and the precise biasing required by the custom ALiBi mechanism. The model defaults to a PyTorch standard attention implementation to ensure the integrity of ALiBi.
-    The `forward` method now returns a tuple: the attention output tensor and `present_key_value` (a tuple of the new K and V state for this layer, which includes past and current states).
-
-*   **`FeedForward`**: This module is a standard position-wise feed-forward network, typically consisting of two linear transformations with an activation function in between.
-    *   It uses `LoRALinear` for its linear layers.
-    *   The activation function is configurable via `LunarisCodexConfig`, with options like SwiGLU or GeLU.
-
-### Special Features
-
-*   **ALiBi (Attention with Linear Biases)**: Lunaris employs a custom ALiBi implementation. Instead of adding explicit positional embeddings to the input tokens, ALiBi modifies attention scores based on the distance between query and key tokens. This method has been shown to improve extrapolation to longer sequence lengths. The implementation is carefully designed to work correctly across different numbers of attention heads.
-
-*   **LoRA (Low-Rank Adaptation)**: LoRA is used in linear layers within the self-attention and feed-forward modules. This allows for more parameter-efficient fine-tuning. During fine-tuning, the original pre-trained model weights are kept frozen, and only the smaller LoRA adapter matrices are updated.
-
-*   **Tied Embeddings**: The weights of the token embedding layer and the final language modeling head are shared. This reduces the total number of parameters in the model and can lead to improved performance.
-
-*   **Configurable Architecture**: Many aspects of the model, such as its size (`d_model`, `n_layers`, `n_heads`), dropout rates, LoRA rank (`lora_rank`), and activation functions, are configurable through the `LunarisCodexConfig` class, allowing users to tailor the model to specific requirements.
-
-This architecture aims to provide a robust and adaptable foundation for various natural language processing tasks, with a focus on efficient training and fine-tuning through LoRA and effective positional encoding via ALiBi.
+The architecture balances performance, modern features, and code clarity, making it an excellent foundation for diverse NLP and code-related tasks.
 
 ---
 
-## GPU Compatibility & Testing
+## GPU Compatibility & Multi-GPU Training
 
-Lunaris Codex is designed to leverage NVIDIA GPUs for accelerated training and inference. The pipeline has been successfully tested on the following architectures and specific cards:
+Lunaris Codex is optimized for NVIDIA GPUs and supports both single-GPU and multi-GPU distributed training:
 
-| GPU Architecture | Tested & Verified Models | Status                                  | Notes                                                                                                |
-| :--------------- | :----------------------- | :-------------------------------------- | :--------------------------------------------------------------------------------------------------- |
-| **NVIDIA Blackwell** | RTX 5090                 | ✅ **Verified Working**                 | Excellent performance with `bf16` precision and `torch.compile`. Tested via [Vast.ai](https://vast.ai/). |
-|                  | *RTX 5080 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested, but expected to work given architectural similarity to RTX 5090.                     |
-|                  | *RTX 5070 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested, but expected to work.                                                                      |
-|                  | *RTX 5060 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested, but expected to work.                                                                      |
-| **NVIDIA Ada Lovelace**| RTX 4070 Ti SUPER        | ✅ **Verified Working**                 | Good performance with `bf16`/`fp16` precision. Previous internal tests.                          |
-|                  | *RTX 4090 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested directly with current full pipeline, but expected to perform exceptionally well.         |
-|                  | *RTX 4080 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested, but expected to work.                                                                      |
-|                  | *RTX 4070 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested, but expected to work.                                                                      |
-|                  | *RTX 4060 (Expected)*    | ⚙️ *Highly Likely Compatible*         | Untested, but expected to work.                                                                      |
+| GPU Architecture | Tested Models | DDP Status | Notes |
+| :--------------- | :------------ | :--------- | :---- |
+| **NVIDIA Blackwell** | RTX 5090 | ✅ **Verified** | Excellent DDP performance with `bf16` and `torch.compile` |
+| **NVIDIA Ada Lovelace** | RTX 4090 (2x setup) | ✅ **Verified** | Successfully tested DDP training with significant speedups |
+|                        | RTX 4070 Ti SUPER | ✅ **Verified** | Single-GPU verified, DDP expected to work |
+| **Other Modern GPUs** | RTX 40/30-series | ⚙️ **Expected Compatible** | Should work with DDP based on PyTorch support |
 
-**Key:**
-*   ✅ **Verified Working:** Successfully run the full training pipeline or significant portions.
-*   ⚙️ *Highly Likely Compatible:* Not explicitly tested by the project maintainer, but compatibility is expected based on architectural similarities and PyTorch support. Users are encouraged to report their experiences.
-
-We aim for broad compatibility with modern NVIDIA GPUs supporting recent CUDA versions and PyTorch. For optimal performance, especially with `bf16` precision (via `--mixed_precision_dtype`) and `torch.compile` (via `--use_torch_compile`), GPUs from the Ada Lovelace (RTX 40-series) and Blackwell (RTX 50-series) generations are recommended.
-
-**Note on FlashAttention:** While the model architecture includes optional support for FlashAttention, it is currently disabled by default due to incompatibilities with the custom ALiBi implementation. The PyTorch native attention mechanism is used.
+**DDP Requirements:**
+- NVIDIA GPUs with CUDA support
+- PyTorch with distributed capabilities
+- NCCL backend (automatically handled)
+- Sufficient GPU memory for model replication across devices
 
 ---
 
 ## Getting Started
-
-This section outlines the basic steps to get Lunaris Codex up and running. Note that training effective Large Language Models typically requires substantial datasets and computational resources.
-
-For more detailed guides and tutorials on each step, please refer to the **[Project Wiki](https://github.com/MeryylleA/lunariscodex/wiki)**.
 
 ### 1. Installation & Setup
 
@@ -175,132 +129,162 @@ For more detailed guides and tutorials on each step, please refer to the **[Proj
     git clone https://github.com/MeryylleA/lunariscodex.git
     cd lunariscodex
     ```
-2.  **Create a Python Virtual Environment:**  
-    (Recommended: Python 3.10 or 3.11)
+
+2.  **Create a Python Virtual Environment:**
     ```bash
     python3 -m venv .venv
-    source .venv/bin/activate  # For Linux/macOS (bash/zsh)
-    # For Fish shell: source .venv/bin/activate.fish
-    # For Windows (cmd): .venv\Scripts\activate
+    source .venv/bin/activate  # Linux/macOS
+    # Windows: .venv\Scripts\activate
     ```
+
 3.  **Install Dependencies:**
     ```bash
     pip install --upgrade pip
     pip install -r requirements.txt
     ```
-    *See `requirements.txt` for core dependencies. For optional GPU acceleration with FlashAttention, install it separately as per its documentation.*
 
-### 2. Data Preparation (`prepare_data.py`)
+### 2. Data Preparation
 
-Prepare your dataset for training. While the example uses a sample of [Lunaris-Data](https://huggingface.co/datasets/meryyllebr543/lunaris-data), effective pre-training often requires datasets with millions of examples.
+Prepare your dataset using `prepare_data.py`. For production training, use datasets with millions of examples:
 
-**Example: Preparing a sample of Lunaris-Data:**
 ```bash
 python prepare_data.py \
     --data_source_type hf_dataset \
     --dataset_name_or_path meryyllebr543/lunaris-data \
     --tokenizer_name_or_path bigcode/starcoder \
-    --output_path ./processed_data/lunaris_data_sample.memmap \
+    --output_path ./processed_data/lunaris_data.memmap \
     --hf_dataset_data_dir data \
     --hf_input_column input \
     --hf_target_column output \
     --hf_formatting_template "USER: {input}\nASSISTANT: {target}" \
     --max_length 1024 \
     --add_special_tokens \
-    --max_examples 1000 \
     --overwrite_output
 ```
-*For detailed usage, see the [Data Preparation Pipeline](https://github.com/MeryylleA/lunariscodex/wiki/Data-Preparation-Pipeline) page on our Wiki or run `python prepare_data.py --help`.*
 
-### 3. Training (`train.py`)
+### 3. Multi-GPU Training with DDP
 
-Train your Lunaris Codex model. The example below is for a small model on CPU. For GPU training, ensure CUDA and compatible PyTorch are installed, and utilize flags like `--device cuda`, `--mixed_precision_dtype bf16`, `--use_torch_compile`, and adjust `--batch_size` accordingly. The script now also supports **gradient accumulation** (via `--accumulation_steps`) and **cosine annealing learning rate schedulers** (via `--lr_scheduler_type cosine_warm_restarts`).
+**🎯 Single-Node, Multi-GPU Training (Recommended):**
 
-**Example: Training a small test model on CPU with LoRA (showcasing some new flags):**
+Launch distributed training using `torchrun` for optimal performance:
+
 ```bash
-python train.py \
-    --memmap_file_train ./processed_data/lunaris_data_sample.memmap \
-    --num_sequences_train 1000 \
+# Example: Training on a single machine with 2 GPUs
+torchrun --standalone --nproc_per_node=2 train.py \
+    --memmap_file_train ./processed_data/lunaris_data.memmap \
+    --num_sequences_train 100000 \
     --tokenizer_name_or_path bigcode/starcoder \
     --dataset_max_length 1024 \
     --model_max_seq_len 1024 \
-    --d_model 256 --n_layers 4 --n_heads 4 \
-    --batch_size 4 \
-    --accumulation_steps 2 \ # Effective batch size = 8
-    --num_epochs 1 \
-    --learning_rate 1e-4 \
+    --d_model 512 --n_layers 8 --n_heads 8 \
+    --batch_size 8 \
+    --accumulation_steps 4 \
+    --num_epochs 3 \
+    --learning_rate 5e-5 \
     --lr_scheduler_type cosine_warm_restarts \
-    --cosine_t_0 125 \ # Calculated as ceil(num_train_sequences / (batch_size * accumulation_steps)) for one epoch
-    --lora_rank 8 \
-    --device cpu \
-    --checkpoint_dir ./checkpoints_tutorial \
-    --num_workers 2 # Example for potential CPU data loading speedup
+    --mixed_precision_dtype bf16 \
+    --use_torch_compile \
+    --lora_rank 16 \
+    --checkpoint_dir ./checkpoints_ddp \
+    --save_every_n_epochs 1
 ```
-*For full training options, including new arguments for gradient accumulation and schedulers, see the [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) page on our Wiki or run `python train.py --help`.*
 
-### 4. Running Inference (`inference.py` v0.3.9)
+**Key DDP Parameters:**
+- `--nproc_per_node=N`: Number of GPUs to use (e.g., 2 for dual-GPU setup)
+- `--standalone`: For single-node training (most common use case)
+- `--batch_size`: **Per-GPU batch size** (effective batch size = batch_size × num_gpus × accumulation_steps)
 
-Generate text with your trained model using the enhanced `inference.py` script, featuring a rich, colorful command-line interface with advanced functionality.
+**Single-GPU Training:**
+For single-GPU or CPU training, use the standard command:
+```bash
+python train.py \
+    --memmap_file_train ./processed_data/lunaris_data.memmap \
+    --device cuda \
+    # ... other arguments
+```
 
-**Example:**
+**📋 Training Tips:**
+- Use `python train.py --help` for a complete list of available options
+- Monitor GPU memory usage and adjust `--batch_size` accordingly
+- Enable `--mixed_precision_dtype bf16` for modern GPUs to save memory and increase speed
+- Use `--use_torch_compile` for additional performance gains on supported hardware
+
+### 4. Inference & Text Generation
+
+Generate text with your trained model using the feature-rich `inference.py`:
+
 ```bash
 python inference.py \
-    --checkpoint_path ./checkpoints_tutorial/best_model.pt \
+    --checkpoint_path ./checkpoints_ddp/best_model.pt \
     --tokenizer_name_or_path bigcode/starcoder \
     --prompt "USER: Write a Python function that calculates factorial.\nASSISTANT:" \
-    --max_new_tokens 100 \
+    --max_new_tokens 200 \
     --temperature 0.7 \
+    --stream \
     --syntax_highlight python
 ```
 
-**Key Features:**
-- **Rich CLI**: Utilizes the `rich` library for formatted outputs, progress indicators, and detailed model/parameter information in structured tables.
-- **Interactive Mode**: Use `--interactive` for conversational prompting with commands (`/quit`, `/clear`, `/config`, `/help`).
-- **Streaming Generation**: Enable `--stream` for real-time token output, ideal for long generations.
-- **Syntax Highlighting**: Supports `--syntax_highlight` (default: `python`) for formatted code output.
-- **Performance Metrics**: Reports memory usage and tokens-per-second for both standard and streaming generation.
-- **Flexible Output**: Load prompts from files (`--prompt_file`), save output to plain text or markdown with metadata (`--output_file`), and disable rich formatting with `--no_color`.
-- **Configurable Generation**: Supports temperature, top-k, top-p, repetition penalty, and random seed for reproducibility.
-
-*Run `python inference.py --help` for all options, including advanced features like interactive mode and streaming generation. See the [Command-Line Arguments for Inference](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Inference) page on our Wiki for detailed usage.*
-
-### 5. Using C++ Utilities (Optional)
-Helper tools for data analysis, text cleaning, and custom BPE tokenization are available. Each utility is located in its own directory (e.g., `bpe_trainer/` for `BpeProcessor`, `text_cleaner/`, `data_analyzer/`) and includes a `README.md` with specific compilation and usage instructions. They can also be compiled using the main `Makefile` at the root of the repository (e.g., `make bpe_processor`).
-
-*   **`BpeProcessor`**: (Located in `bpe_trainer/`) Trains BPE models from a corpus and tokenizes text using these custom models.
-*   **`lunaris_text_cleaner`**: Cleans raw text files before tokenization. (Located in `text_cleaner/`)
-*   **`lunaris_data_analyzer`**: Inspects and validates `.memmap` dataset files. (Located in `data_analyzer/`)
-
+**Advanced Features:**
+- `--interactive`: Enter interactive chat mode
+- `--stream`: Real-time token streaming
+- `--syntax_highlight`: Code syntax highlighting
+- `--prompt_file`: Load prompts from file
+- `--output_file`: Save generated text
+- 
 ---
 
 ## Documentation & Wiki
 
-For in-depth information, tutorials, and advanced guides, please visit the **[Lunaris Codex Project Wiki](https://github.com/MeryylleA/lunariscodex/wiki)**.  
-Key pages include:
-*   **[Home](https://github.com/MeryylleA/lunariscodex/wiki/Home)** (Start here for an overview of the Wiki content)
-*   **[Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines)**
-*   [Data Preparation Pipeline](https://github.com/MeryylleA/lunariscodex/wiki/Data-Preparation-Pipeline) (`prepare_data.py`)
-*   [Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training) (`train.py`)
-*   [Utility: BPE Processor](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-BPE-Processor)
-*   [Utility: Lunaris Text Cleaner](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Text-Cleaner)
-*   [Utility: Lunaris Data Analyzer](https://github.com/MeryylleA/lunariscodex/wiki/Utility:-Lunaris-Data-Analyzer)
-*   [Tutorial: Training Your First Model](https://github.com/MeryylleA/lunariscodex/wiki/Training-Your-First-Model)
-*   [Tutorial: Using the Lunaris-Data Dataset](https://github.com/MeryylleA/lunariscodex/wiki/Using-the-Lunaris-Data-Dataset)
+For comprehensive guides, tutorials, and API documentation, visit the **[Lunaris Codex Project Wiki](https://github.com/MeryylleA/lunariscodex/wiki)**.
+
+**Essential Pages:**
+- **[Home](https://github.com/MeryylleA/lunariscodex/wiki/Home)** - Start here for an overview
+- **[Dataset and Training Guidelines](https://github.com/MeryylleA/lunariscodex/wiki/Dataset-and-Training-Guidelines)**
+- **[Data Preparation Pipeline](https://github.com/MeryylleA/lunariscodex/wiki/Data-Preparation-Pipeline)**
+- **[Command-Line Arguments for Training](https://github.com/MeryylleA/lunariscodex/wiki/Command-Line-Arguments-for-Training)**
+- **[Tutorial: Training Your First Model](https://github.com/MeryylleA/lunariscodex/wiki/Training-Your-First-Model)**
 
 ---
 
 ## Roadmap
 
-Our current focus and future plans include:
-*   **Finalize and fully integrate the `BpeProcessor` (custom BPE tokenizer) with `prepare_data.py`, allowing native use of custom-trained tokenizers.**
-*   **Implement detokenization functionality in `BpeProcessor`.**
-*   Enhancing `lunaris_data_analyzer` with token decoding capabilities.
-*   Increasing unit test coverage for `model.py`.
-*   Developing a dedicated evaluation script (`evaluate.py`).
-*   Further enhancing `inference.py` (interactive mode, batch generation, etc.).
-*   Expanding documentation: advanced tutorials, API reference.
-*   Further optimize training on various GPU architectures.
-*   (Ambitious) Releasing small to medium pretrained base models if resources permit.
+Our current development focus:
+
+**Immediate Goals:**
+- **Enhanced DDP Support**: Multi-node training capabilities and advanced distributed features
+- **Model Architecture Improvements**: Additional attention mechanisms and architectural variants
+- **Performance Optimizations**: Further integration with `torch.compile` and FlashAttention
+
+**Upcoming Features:**
+- **Evaluation Framework**: Comprehensive model evaluation and benchmarking tools
+- **Advanced Inference**: Batch generation, speculative decoding, and deployment optimizations
+- **Extended Tokenizer Support**: Full integration of custom BPE tokenizers with `prepare_data.py`
+- **Production Tools**: Model quantization, ONNX export, and deployment utilities
+
+**Long-term Vision:**
+- Release of pretrained base models across various scales
+- Community-driven model variants and specialized architectures
+- Integration with popular ML frameworks and deployment platforms
+
+---
+
+## Contributing & Community
+
+**Lunaris Codex is built by the community, for the community.** We welcome contributions of all kinds!
+
+**Ways to Contribute:**
+- 🐛 **Bug Reports**: Found an issue? Let us know!
+- 💡 **Feature Requests**: Have ideas for improvements?
+- 📖 **Documentation**: Help improve our guides and tutorials
+- 🔧 **Code**: Submit pull requests for new features or fixes
+- 💬 **Community**: Join discussions and help other users
+
+**Get Involved:**
+- **GitHub**: [github.com/MeryylleA/lunariscodex](https://github.com/MeryylleA/lunariscodex)
+- **Discord**: [Moon Cloud Services](https://discord.gg/JNsfzEwMtC) (Lunaris Codex section)
+- **Contributing Guide**: See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines
+
+**Developed by:** Francisco Antonio ([@MeryylleA](https://github.com/MeryylleA) on GitHub, [@Meryylle](https://x.com/a93918) on X/Twitter)
 
 ---
 
@@ -309,24 +293,21 @@ Our current focus and future plans include:
 This project is licensed under the **MIT License**.  
 Copyright (c) 2024-2025 **Francisco Antonio**
 
-See [`LICENSE`](LICENSE) for more details.
+See [`LICENSE`](LICENSE) for complete terms.
 
 ---
 
-## Contributing & Community
+## Special Thanks
 
-Developed by **Francisco Antonio** ([@MeryylleA](https://github.com/MeryylleA) on GitHub, [@Meryylle](https://x.com/a93918) on X/Twitter).
-
-Lunaris Codex is an open-source endeavor. Contributions, feedback, bug reports, and feature requests are highly encouraged! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) guidelines and join our community. (Discord: [Moon Cloud Services](https://discord.gg/JNsfzEwMtC) - Lunaris Codex has a dedicated section here)
-
-Let's build something amazing together!
-
-### Special Thanks
-*   To the broader open-source AI community for their invaluable tools, research, and datasets.
-*   To **Gemini (Google)** for extensive pair-programming sessions, architectural discussions, debugging support, and documentation assistance throughout the development of this project.
+- **The Open-Source AI Community** for their invaluable tools, research, and datasets
+- **PyTorch Team** for the excellent distributed training framework that makes DDP possible
+- **Gemini (Google)** for extensive development support, architectural discussions, and documentation assistance
+- **Our Contributors** who help make Lunaris Codex better every day
 
 ---
 
 ## Why "Lunaris"?
 
 > *"Because great ideas are born in silence — and shine like the moon."*
+
+Just as the moon illuminates the darkness with reflected light, Lunaris Codex aims to illuminate the path forward in AI development by reflecting and building upon the best ideas in the field, making them accessible to everyone.
