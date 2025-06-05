@@ -12,6 +12,10 @@ Our philosophy goes beyond fine-tuning existing models—we provide a robust fou
 
 > **Note:** This project focuses on delivering a robust, well-tested architecture and a complete toolkit for training, data processing, and inference. While we aspire to release large-scale pretrained models, the main value here is the code, documentation, and reproducible pipeline.
 
+🧠 Research Support
+
+Compute resources for this project were provided by Lambda Cloud through their Lambda Research Grant Program.
+
 ---
 
 ## 🚀 What's New: Multi-GPU Training with DistributedDataParallel
