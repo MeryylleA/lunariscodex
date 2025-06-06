@@ -32,7 +32,7 @@ class LunarisCodexConfig:
         repetition_penalty=1.1,
         lora_rank=32,
         use_flash_attention_if_available=False,
-        layer_norm_epsilon=1e-6,
+        layer_norm_epsilon=1e-5,
         ff_multiplier=4,
         pad_token_id=-100
     ):
