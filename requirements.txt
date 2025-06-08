@@ -1,48 +1,50 @@
 # Lunaris Codex - Project Dependencies
 # ------------------------------------
-# This file lists the Python packages required to run and develop
-# the Lunaris Codex project, including data preparation, training,
-# inference, and utility scripts.
+# This file lists the Python packages required to run the core
+# Lunaris Codex project (training and inference).
 #
 # Recommended Python version: 3.10.x or 3.11.x
 #
-# To install these dependencies into your virtual environment:
+# To install:
 #   pip install --upgrade pip
 #   pip install -r requirements.txt
 #
-# For GPU support (NVIDIA), ensure you have a compatible CUDA toolkit installed.
-# The torch version listed here will attempt to install with CUDA support if available
-# from PyPI's default wheels. For specific CUDA versions, consider installing
-# PyTorch manually from pytorch.org.
+# For NVIDIA GPU support, ensure a compatible CUDA toolkit is installed. The torch
+# version listed here will attempt to install with CUDA support. For specific
+# CUDA versions, consider installing PyTorch manually from pytorch.org.
 
 # --- Core Deep Learning & ML Ecosystem ---
-torch>=2.1.0                # PyTorch 2.1+ recommended. Successfully trained on Vast.ai with CUDA 12.1 compatible version (e.g., torch 2.2.x, 2.3.x).
-transformers>=4.38.0        # For AutoTokenizer, model utilities. Tested with up to 4.41.x.
-datasets>=2.14.0            # For load_dataset and robust dataset handling.
-accelerate>=0.27.0          # Useful for PyTorch training, DDP, and device management. Recommended.
+torch>=2.1.0                # PyTorch 2.1+ is recommended.
+transformers>=4.38.0        # For loading tokenizers (AutoTokenizer).
+datasets>=2.14.0            # Required for certain tokenizer/data utilities from the HF ecosystem.
 
 # --- Data Handling & Utilities ---
-numpy>=1.23.0              # Numerical operations, used for memmap arrays.
-tqdm>=4.60.0               # Progress bars for data processing and training loops.
-sentencepiece>=0.1.98       # Required by many tokenizers (e.g., Llama, Gemma, StarCoder). Version 0.2.0+ tested.
-safetensors>=0.4.0         # For secure and fast tensor serialization (used by Hugging Face, potentially for future model sharing).
-                           # Note: Current training checkpoints use PyTorch's native .pt format.
-psutil>=5.9.0              # For memory usage monitoring in inference.
+numpy>=1.23.0               # For memory-mapped arrays and numerical operations.
+tqdm>=4.60.0                # For clean progress bars during training loops.
+psutil>=5.9.0               # For memory usage monitoring in the inference script.
+
+# --- Tokenizer Backends & Model Serialization ---
+# Required by many modern tokenizers (e.g., StarCoder, Llama).
+sentencepiece>=0.1.98
+# For secure and fast tensor serialization (standard in the Hugging Face ecosystem).
+safetensors>=0.4.0
 
 # --- CLI Enhancement & User Experience ---
-rich>=13.0.0               # For beautiful and informative command-line interfaces (used in inference.py).
+# For the rich, interactive command-line interface in `inference.py`.
+rich>=13.0.0
 
-# --- Optional for NVIDIA GPU Acceleration (Install Manually) ---
-# flash-attn                 # For FlashAttention optimized attention mechanism.
-                             # Not listed as a direct dependency to ensure CPU-only setup works out-of-the-box.
-                             # If you have a compatible NVIDIA GPU and CUDA setup, install manually:
-                             # pip install flash-attn --no-build-isolation
-                             # Refer to the official flash-attn repository for specific version compatibility.
+# --- Optional for Performance (Manual Install) ---
+# For optimized attention on compatible NVIDIA GPUs, install manually.
+# This is NOT a required dependency and is only needed for performance optimization.
+# >> pip install flash-attn --no-build-isolation
+#
+# flash-attn
 
-# --- Development & Testing ---
-pytest>=7.0.0              # For running unit tests.
-pytest-cov>=4.0.0          # For test coverage reporting.
-# flake8>=6.0.0              # For Python style guide enforcement.
-# black>=23.0.0              # For opinionated Python code formatting.
-# isort>=5.10.0              # For sorting Python imports.
-# clang-format               # For C++ code formatting (install via system package manager, e.g., apt-get).
+# --- Development & Testing (For Contributors) ---
+# These packages are not required for running the project, but are used
+# for development, linting, and testing. See CONTRIBUTING.md for details.
+#
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# black>=23.0.0
+# flake8>=6.0.0
