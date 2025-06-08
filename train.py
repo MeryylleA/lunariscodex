@@ -15,6 +15,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 from transformers import AutoTokenizer
+import wandb # Adicionado para Weights & Biases
 
 try:
     from model import LunarisCodexConfig, LunarisMind
@@ -60,8 +61,10 @@ Launch with torchrun:
 Example:
     torchrun --standalone --nproc_per_node=4 train.py \
         --memmap_file_train /path/to/train.memmap \
+        --num_sequences_train 100000 \
         --batch_size 16 \
-        --num_epochs 3
+        --num_epochs 3 \
+        --use_wandb --wandb_project "lunaris_codex"
 """
 
 # Setup logging - only detailed logging from rank 0
@@ -113,7 +116,7 @@ def compute_sha256(filepath):
         return None
 
 class MemmapCodeDataset(Dataset):
-    def __init__(self, memmap_file, tokenizer_pad_id, dtype_str="int32"): # Assinatura correta
+    def __init__(self, memmap_file, tokenizer_pad_id, dtype_str="int32"): # Removido num_sequences e max_length daqui
         # Only log from rank 0 to avoid duplicate messages
         # Check if dist is initialized before calling get_rank
         current_rank = 0
@@ -245,6 +248,25 @@ def save_checkpoint(model, optimizer, epoch, step, current_loss, args, is_best=F
 
         logging.info(f"Checkpoint saved: {checkpoint_path}")
 
+        # --- W&B Integration: Log checkpoint as artifact ---
+        if args.use_wandb and wandb.run:
+            try:
+                artifact_name = f"run_{wandb.run.id}_checkpoint"
+                artifact = wandb.Artifact(
+                    name=artifact_name,
+                    type="model",
+                    description=f"Checkpoint at epoch {epoch+1}, step {step}",
+                    metadata={"epoch": epoch, "step": step, "loss": current_loss}
+                )
+                artifact.add_file(checkpoint_path)
+                aliases = ["latest", f"epoch-{epoch+1}", f"step-{step}"]
+                if is_best:
+                    aliases.append("best")
+                wandb.log_artifact(artifact, aliases=aliases)
+                logging.info(f"Logged checkpoint artifact to W&B: {artifact_name}")
+            except Exception as e:
+                logging.error(f"Failed to log checkpoint artifact to W&B: {e}")
+
         if is_best:
             best_path = os.path.join(args.checkpoint_dir, "best_model.pt")
             torch.save(checkpoint_data, best_path) # Save a copy as best_model.pt
@@ -309,14 +331,24 @@ def load_checkpoint(model, optimizer, args, device, scheduler=None, rank=0):
             checkpoint = torch.load(checkpoint_to_load, map_location=device, weights_only=False) # weights_only=False for full state
 
             # Handle DDP model loading (model might be DDP, checkpoint might be from DDP or single GPU)
+            # At this point, 'model' is the DDP-wrapped model if world_size > 1, or raw model if world_size == 1.
             target_model_for_load = model.module if hasattr(model, 'module') else model
             model_state_dict = checkpoint["model_state_dict"]
 
+            # Adjust keys if DDP state mismatch (e.g. loading DDP checkpoint into non-DDP model or vice-versa)
+            # This logic might need refinement if target_model_for_load is already DDP's module
+            is_target_model_ddp_module = not hasattr(model, 'module') # True if model is raw, or we already have model.module
+                                                                    # This logic is tricky here.
+                                                                    # Let's assume target_model_for_load is the one to load into.
+
             is_checkpoint_ddp = any(k.startswith("module.") for k in model_state_dict.keys())
 
+            # If target_model_for_load is the raw model (not DDP wrapped, or is module of DDP)
+            # and checkpoint has 'module.' prefix, strip it.
             if not is_checkpoint_ddp: # Checkpoint is from a raw model
                  target_model_for_load.load_state_dict(model_state_dict, strict=False)
             else: # Checkpoint is from a DDP model (has 'module.' prefix)
+                # If target_model_for_load is the raw model (e.g. model.module), strip prefix from checkpoint keys
                 model_state_dict_stripped = {k.replace("module.", ""): v for k, v in model_state_dict.items()}
                 target_model_for_load.load_state_dict(model_state_dict_stripped, strict=False)
 
@@ -380,34 +412,55 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args, d
     """Main training loop with DDP support and corrected gradient accumulation."""
     model.to(device) # Move model to the target device first
 
+    # --- DDP FIX: Only wrap with DDP if world_size > 1 ---
     if world_size > 1:
+        # If world_size > 1, setup_distributed was called in main().
+        # setup_distributed uses "nccl" backend, which is for GPUs.
+        # Therefore, device.type should be 'cuda'.
         if device.type == 'cuda':
             model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
             if rank == 0: logging.info(f"Model wrapped with DDP for CUDA device {local_rank}.")
         else:
+            # This case (world_size > 1, device is CPU, but backend is nccl) indicates a misconfiguration.
+            # DDP with nccl backend requires CUDA.
+            # For multi-CPU DDP, 'gloo' backend should be used, and DDP init is different (no device_ids).
             if rank == 0:
                 logging.error(f"DDP (world_size > 1) with NCCL backend requires CUDA, but device is CPU. Training may fail or be incorrect.")
-            model = DDP(model, find_unused_parameters=False) # For CPU DDP (with gloo)
+            # Attempting DDP for CPU, assuming 'gloo' might have been intended or for basic structure.
+            # This might still fail if init_process_group was strictly 'nccl' and no CUDA.
+            # However, the primary error "Default process group has not been initialized" is avoided by this conditional.
+            model = DDP(model, find_unused_parameters=False) # For CPU DDP (with gloo), device_ids is None
             if rank == 0: logging.info("Model wrapped with DDP for CPU (ensure 'gloo' backend was used if this is multi-CPU).")
+    # If world_size == 1, model remains the original model, already on the correct device.
+    # --- END DDP FIX ---
 
+    # --- W&B Integration: Watch model ---
+    if rank == 0 and args.use_wandb and wandb.run:
+        wandb.watch(model, log="gradients", log_freq=args.log_interval, log_graph=True)
+
+    # Configure parameters for optimizer (LoRA or full model)
+    # model.named_parameters() will correctly access model.module.named_parameters() if DDP wrapped.
     args.use_lora = args.lora_rank > 0
     optimizer_params = []
     if args.use_lora:
         if rank == 0: logging.info(f"Configuring optimizer for LoRA training (rank={args.lora_rank}).")
         for name, param in model.named_parameters():
-            if "lora_" in name or "ls_gamma" in name:
+            if "lora_" in name or "ls_gamma" in name: # Assuming 'ls_gamma' is another LoRA-related param
                 param.requires_grad = True
                 optimizer_params.append(param)
             else:
                 param.requires_grad = False
     else:
         if rank == 0: logging.info("Configuring optimizer for full model training.")
-        for param in model.parameters():
+        for param in model.parameters(): # All parameters are trainable
             param.requires_grad = True
             optimizer_params.append(param)
 
     num_trainable_params = sum(p.numel() for p in optimizer_params if p.requires_grad)
     if num_trainable_params == 0:
+        # This check should ideally be after attempting to access parameters,
+        # as DDP wrapping might affect parameter access if not careful,
+        # but PyTorch DDP handles .parameters() and .named_parameters() forwarding.
         raise ValueError("No trainable parameters found for the optimizer. Check LoRA setup or model parameters.")
     if rank == 0: logging.info(f"Number of parameters to be optimized: {num_trainable_params:,}")
 
@@ -415,55 +468,73 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args, d
         optimizer_params,
         lr=args.learning_rate,
         weight_decay=args.weight_decay,
-        fused=(args.adam_fused and device.type == "cuda" and torch.cuda.is_available())
+        fused=(args.adam_fused and device.type == "cuda" and torch.cuda.is_available()) # Fused AdamW if available and enabled
     )
 
+    # Scheduler setup
     scheduler = None
     if args.lr_scheduler_type == "plateau":
         scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=args.lr_scheduler_patience)
         if rank == 0: logging.info(f"Using ReduceLROnPlateau scheduler with patience {args.lr_scheduler_patience}.")
     elif args.lr_scheduler_type == "cosine_warm_restarts":
+        # Calculate T_0 based on steps per epoch if not provided
         t_0 = args.cosine_t_0
         if t_0 is None:
+            # Ensure train_dataloader is not empty and accumulation_steps is positive
             if len(train_dataloader) > 0 and args.accumulation_steps > 0:
-                 t_0 = len(train_dataloader) // args.accumulation_steps
+                 t_0 = len(train_dataloader) // args.accumulation_steps # Steps per epoch after accumulation
             else:
-                t_0 = 1
-            if t_0 == 0: t_0 = 1
+                t_0 = 1 # Fallback if dataloader is empty or invalid accumulation_steps
+            if t_0 == 0: t_0 = 1 # Ensure T_0 is at least 1
             if rank == 0: logging.info(f"CosineAnnealingWarmRestarts T_0 defaulting to {t_0} steps.")
         scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=t_0, T_mult=args.cosine_t_mult, eta_min=args.cosine_eta_min)
         if rank == 0: logging.info(f"Using CosineAnnealingWarmRestarts scheduler (T_0={t_0}, T_mult={args.cosine_t_mult}, eta_min={args.cosine_eta_min}).")
 
+    # GradScaler for mixed precision
     scaler = amp.GradScaler(enabled=(args.mixed_precision_dtype is not None and device.type == "cuda"))
+
+    # Load checkpoint
+    # 'model' here is DDP-wrapped if world_size > 1, or raw if world_size == 1.
+    # load_checkpoint needs to handle this (e.g. by accessing model.module if present).
     start_epoch, global_step, best_val_loss = load_checkpoint(model, optimizer, args, device, scheduler, rank)
 
+    # Compile model if requested (after DDP and checkpoint loading)
     if args.use_torch_compile and hasattr(torch, "compile"):
         if rank == 0: logging.info(f"Attempting to compile model with torch.compile (mode: {args.torch_compile_mode})...")
         try:
+            # model.module is compiled if model is DDP
+            # Or compile model directly if not DDP
             model_to_compile = model.module if hasattr(model, 'module') else model
             compiled_model = torch.compile(model_to_compile, mode=args.torch_compile_mode)
-            if hasattr(model, 'module'):
+            if hasattr(model, 'module'): # If model was DDP wrapped
                 model.module = compiled_model
-            else:
+            else: # If model was not DDP wrapped
                 model = compiled_model
             if rank == 0: logging.info("Model compiled successfully.")
         except Exception as e:
             if rank == 0: logging.warning(f"Model compilation failed: {e}. Proceeding without compilation.")
 
-    for epoch in range(start_epoch, args.num_epochs):
-        model.train()
 
-        if world_size > 1 and hasattr(train_dataloader.sampler, 'set_epoch'):
+    for epoch in range(start_epoch, args.num_epochs):
+        model.train() # Set model to training mode
+
+        # Set epoch for DistributedSampler to ensure proper shuffling across epochs
+        if world_size > 1 and hasattr(train_dataloader.sampler, 'set_epoch'): # Sampler only exists for DDP
             train_dataloader.sampler.set_epoch(epoch)
 
-        optimizer.zero_grad()
+        optimizer.zero_grad() # Zero gradients at the beginning of each epoch and after each optimizer step
+
+        # Metrics for the current epoch
         epoch_metrics = {"loss": 0.0, "perplexity": 0.0, "accuracy": 0.0, "count": 0}
+
+        # Progress bar only on rank 0
         train_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.num_epochs} (Opt Steps: {global_step})", disable=(rank != 0))
 
         for batch_idx, batch in enumerate(train_iterator):
             input_ids = batch["input_ids"].to(device, non_blocking=args.pin_memory)
             attention_mask = batch["attention_mask"].to(device, non_blocking=args.pin_memory)
 
+            # Determine autocast settings
             cast_dtype = torch.float32
             use_autocast = args.mixed_precision_dtype is not None and device.type == "cuda"
             if use_autocast:
@@ -471,6 +542,7 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args, d
 
             with amp.autocast(device_type=device.type, enabled=use_autocast, dtype=cast_dtype):
                 logits = model(input_ids, attention_mask=attention_mask)
+                # 'loss' here is the true, un-scaled (by accumulation_steps) loss for the current micro-batch
                 loss, perplexity, accuracy = compute_metrics(logits, input_ids, attention_mask)
 
             if torch.isnan(loss) or torch.isinf(loss):
@@ -481,9 +553,15 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args, d
             scaled_loss = scaler.scale(loss)
             scaled_loss.backward()
 
+
+            # Optimizer step after accumulation_steps or at the end of dataloader
             if (batch_idx + 1) % args.accumulation_steps == 0 or (batch_idx + 1) == len(train_dataloader):
                 if args.grad_clip_norm > 0:
+                    # If DDP, gradients are already synced. Clipping is done on local grads.
+                    # scaler.unscale_ must be called before clip_grad_norm_
                     scaler.unscale_(optimizer)
+                    # Parameters to clip: if DDP, model.module.parameters(), else model.parameters()
+                    # However, optimizer_params already holds the correct set of parameters.
                     torch.nn.utils.clip_grad_norm_(optimizer_params, args.grad_clip_norm)
 
                 scaler.step(optimizer)
@@ -492,16 +570,19 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args, d
                 global_step += 1
 
                 if args.lr_scheduler_type == "cosine_warm_restarts" and scheduler is not None:
+                    # Ensure len(train_dataloader) is not zero to avoid division by zero
                     if len(train_dataloader) > 0:
                         scheduler.step(epoch + batch_idx / len(train_dataloader))
-                    else:
+                    else: # If dataloader is empty, step with epoch only (less ideal)
                         scheduler.step(epoch)
+
 
                 if rank == 0:
                     train_iterator.set_description(f"Epoch {epoch+1}/{args.num_epochs} (Opt Steps: {global_step})")
 
             if torch.isfinite(loss):
-                epoch_metrics["loss"] += loss.item()
+                micro_batch_loss_for_logging = loss.item()
+                epoch_metrics["loss"] += micro_batch_loss_for_logging
                 epoch_metrics["perplexity"] += perplexity.item() if torch.isfinite(perplexity) else 20.0
                 epoch_metrics["accuracy"] += accuracy.item()
                 epoch_metrics["count"] += 1
@@ -515,7 +596,20 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args, d
                 })
 
             if global_step > 0 and global_step % args.log_interval == 0 and rank == 0 and ( (batch_idx + 1) % args.accumulation_steps == 0 or (batch_idx + 1) == len(train_dataloader) ):
-                logging.info(f"E{epoch+1} B{batch_idx+1} OptS{global_step} | Loss: {loss.item():.4f}, PPL: {perplexity.item():.2f}, Acc: {accuracy.item():.3f}, LR: {optimizer.param_groups[0]['lr']:.2e}")
+                current_display_loss = loss.item()
+                current_ppl = perplexity.item() if torch.isfinite(perplexity) else float('inf')
+                current_acc = accuracy.item() if torch.isfinite(accuracy) else float('nan')
+                logging.info(f"E{epoch+1} B{batch_idx+1} OptS{global_step} | Loss: {current_display_loss:.4f}, PPL: {current_ppl:.2f}, Acc: {current_acc:.3f}, LR: {optimizer.param_groups[0]['lr']:.2e}")
+
+                # --- W&B Integration: Log training metrics ---
+                if args.use_wandb and wandb.run:
+                    wandb.log({
+                        "train/step_loss": current_display_loss,
+                        "train/step_perplexity": current_ppl,
+                        "train/step_accuracy": current_acc,
+                        "train/learning_rate": optimizer.param_groups[0]['lr'],
+                        "global_step": global_step
+                    }, step=global_step)
 
             if args.save_strategy == "steps" and global_step > 0 and global_step % args.save_steps == 0:
                 loss_for_step_checkpoint = loss.item()
@@ -525,6 +619,13 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args, d
                     val_loss_eval, val_ppl_eval, val_acc_eval = evaluate_model(model, val_dataloader, args, device, rank, world_size)
                     if rank == 0:
                         logging.info(f"Opt Step {global_step} Validation - Loss: {val_loss_eval:.4f}, PPL: {val_ppl_eval:.2f}, Acc: {val_acc_eval:.3f}")
+                        # --- W&B Integration: Log step validation metrics ---
+                        if args.use_wandb and wandb.run:
+                            wandb.log({
+                                "validation/step_loss": val_loss_eval,
+                                "validation/step_perplexity": val_ppl_eval,
+                                "validation/step_accuracy": val_acc_eval,
+                            }, step=global_step)
 
                     if args.lr_scheduler_type == "plateau" and scheduler is not None:
                         scheduler.step(val_loss_eval)
@@ -548,10 +649,19 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args, d
              avg_epoch_loss = float('inf')
              if rank == 0: logging.warning(f"Epoch {epoch+1} had no training batches with finite loss.")
 
+
         if val_dataloader:
             val_loss, val_ppl, val_acc = evaluate_model(model, val_dataloader, args, device, rank, world_size)
             if rank == 0:
                 logging.info(f"Epoch {epoch+1} Validation - Loss: {val_loss:.4f}, PPL: {val_ppl:.2f}, Acc: {val_acc:.3f}")
+                # --- W&B Integration: Log epoch validation metrics ---
+                if args.use_wandb and wandb.run:
+                    wandb.log({
+                        "validation/epoch_loss": val_loss,
+                        "validation/epoch_perplexity": val_ppl,
+                        "validation/epoch_accuracy": val_acc,
+                        "epoch": epoch + 1
+                    }, step=global_step)
 
             if args.lr_scheduler_type == "plateau" and scheduler is not None:
                 scheduler.step(val_loss)
@@ -568,10 +678,13 @@ def train_model_loop(model, train_dataloader, val_dataloader, tokenizer, args, d
             if world_size > 1: dist.barrier()
             save_checkpoint(model, optimizer, epoch, global_step, avg_epoch_loss, args, False, scheduler, rank)
 
+
     if rank == 0:
         logging.info("Training completed.")
+
     if world_size > 1:
         dist.barrier()
+
     return model
 
 def evaluate_model(model, dataloader, args, device, rank, world_size):
@@ -603,6 +716,7 @@ def evaluate_model(model, dataloader, args, device, rank, world_size):
             elif rank == 0:
                 logging.debug(f"Non-finite loss ({loss.item()}) in evaluation batch.")
 
+
     if world_size > 1:
         local_metrics = torch.tensor([total_loss, total_perplexity, total_accuracy, count], dtype=torch.float64, device=device)
         dist.all_reduce(local_metrics, op=dist.ReduceOp.SUM)
@@ -630,9 +744,11 @@ def main():
 
     data_group = parser.add_argument_group("Dataset")
     data_group.add_argument("--memmap_file_train", type=str, required=True, help="Path to training data memmap file.")
+    data_group.add_argument("--num_sequences_train", type=int, required=True, help="Number of sequences in training memmap (for validation/info).")
     data_group.add_argument("--memmap_file_val", type=str, default=None, help="Path to validation data memmap file.")
-    # --- CORREÇÃO: Removidos argumentos num_sequences e dataset_max_length que não são mais necessários ---
+    data_group.add_argument("--num_sequences_val", type=int, default=0, help="Number of sequences in validation memmap (for validation/info).")
     data_group.add_argument("--tokenizer_name_or_path", type=str, default="bigcode/starcoder", help="Tokenizer name or path.")
+    data_group.add_argument("--dataset_max_length", type=int, default=1024, help="Max sequence length for dataset (informational, shape is inferred).")
     data_group.add_argument("--dataset_dtype", type=str, default="int32", choices=["int16", "int32"], help="Numpy dtype for memmap data.")
 
     model_group = parser.add_argument_group("Model")
@@ -677,6 +793,13 @@ def main():
     opt_group.add_argument("--allow_tf32", action="store_true", help="Allow TF32 on Ampere GPUs.")
     opt_group.add_argument("--cudnn_benchmark", action="store_true", help="Enable cuDNN benchmark mode.")
 
+    # --- W&B Arguments ---
+    wandb_group = parser.add_argument_group("Weights & Biases")
+    wandb_group.add_argument("--use_wandb", action="store_true", help="Enable Weights & Biases logging.")
+    wandb_group.add_argument("--wandb_project", type=str, default="lunaris-codex-training", help="W&B project name.")
+    wandb_group.add_argument("--wandb_entity", type=str, default=None, help="W&B entity (username or team).")
+    wandb_group.add_argument("--wandb_run_name", type=str, default=None, help="W&B run name. Defaults to a generated name.")
+
     args = parser.parse_args()
 
     rank = int(os.environ.get("RANK", 0))
@@ -687,6 +810,21 @@ def main():
 
     logger = setup_logging(rank)
 
+    # --- W&B Initialization (only on rank 0) ---
+    if rank == 0 and args.use_wandb:
+        try:
+            wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=args.wandb_run_name,
+                config=vars(args),
+                resume="allow", # Allows resuming a run if the ID is found
+            )
+            logger.info("Weights & Biases initialized successfully.")
+        except Exception as e:
+            logger.warning(f"Could not initialize Weights & Biases: {e}. Disabling W&B.")
+            args.use_wandb = False # Disable W&B if init fails
+
     if is_ddp:
         if not torch.cuda.is_available():
             logger.error("Distributed training (DDP) with NCCL backend requires CUDA, but CUDA is not available. Exiting.")
@@ -696,14 +834,15 @@ def main():
         logger.info(f"DDP Initialized: Rank {rank}/{world_size}, Local Rank: {local_rank}, Device: cuda:{local_rank}")
     else:
         logger.info("DDP not initialized. Running in single-process mode.")
+        # local_rank will be 0 if not set by env, device will be cuda:0 or cpu.
         if torch.cuda.is_available():
-            logger.info(f"Using device: cuda:{local_rank}")
+            logger.info(f"Using device: cuda:{local_rank}") # local_rank is 0 for single GPU
         else:
             logger.info(f"Using device: cpu")
 
 
     if torch.cuda.is_available():
-        device = torch.device(f"cuda:{local_rank}")
+        device = torch.device(f"cuda:{local_rank}") # For DDP, local_rank is the GPU. For single GPU, local_rank is 0.
     else:
         device = torch.device("cpu")
 
@@ -729,7 +868,8 @@ def main():
     if tokenizer.pad_token_id is None:
         raise ValueError("Could not set a pad_token_id for the tokenizer.")
 
-    # --- CORREÇÃO: Chamada ao construtor de MemmapCodeDataset corrigida ---
+    # BUG FIX: The original code passed incorrect arguments to MemmapCodeDataset.
+    # The class now infers shape from the file, so num_sequences and max_length are not needed here.
     train_dataset = MemmapCodeDataset(
         memmap_file=args.memmap_file_train,
         tokenizer_pad_id=tokenizer.pad_token_id,
@@ -750,8 +890,7 @@ def main():
     )
 
     val_dataloader = None
-    if args.memmap_file_val:
-        # --- CORREÇÃO: Chamada ao construtor de MemmapCodeDataset corrigida ---
+    if args.memmap_file_val and args.num_sequences_val > 0:
         val_dataset = MemmapCodeDataset(
             memmap_file=args.memmap_file_val,
             tokenizer_pad_id=tokenizer.pad_token_id,
@@ -795,6 +934,11 @@ def main():
     except Exception as e:
         logger.error(f"Training failed with error: {e}", exc_info=True)
     finally:
+        # --- W&B Finalization ---
+        if rank == 0 and args.use_wandb and wandb.run:
+            wandb.finish()
+            logger.info("Weights & Biases run finished.")
+
         if is_ddp: # world_size > 1
             cleanup_distributed()
             if rank == 0: logger.info("DDP environment cleaned up.")
