@@ -205,3 +205,4 @@ Join our community on Discord: [**Moon Cloud Services**](https://discord.gg/JNsf
 ### Special Thanks
 *   To the open-source AI community for their invaluable tools, research, and datasets.
 *   To **Google Gemini** for extensive pair-programming sessions, architectural discussions, debugging, and documentation assistance.
+*   Lambda AI, for supporting this project with large-scale training servers
