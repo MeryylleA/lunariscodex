@@ -1,50 +1,61 @@
-# Lunaris Codex - Project Dependencies
-# ------------------------------------
-# This file lists the Python packages required to run the core
-# Lunaris Codex project (training and inference).
-#
-# Recommended Python version: 3.10.x or 3.11.x
-#
-# To install:
-#   pip install --upgrade pip
-#   pip install -r requirements.txt
-#
-# For NVIDIA GPU support, ensure a compatible CUDA toolkit is installed. The torch
-# version listed here will attempt to install with CUDA support. For specific
-# CUDA versions, consider installing PyTorch manually from pytorch.org.
-
-# --- Core Deep Learning & ML Ecosystem ---
-torch>=2.1.0                # PyTorch 2.1+ is recommended.
-transformers>=4.38.0        # For loading tokenizers (AutoTokenizer).
-datasets>=2.14.0            # Required for certain tokenizer/data utilities from the HF ecosystem.
-
-# --- Data Handling & Utilities ---
-numpy>=1.23.0               # For memory-mapped arrays and numerical operations.
-tqdm>=4.60.0                # For clean progress bars during training loops.
-psutil>=5.9.0               # For memory usage monitoring in the inference script.
-
-# --- Tokenizer Backends & Model Serialization ---
-# Required by many modern tokenizers (e.g., StarCoder, Llama).
-sentencepiece>=0.1.98
-# For secure and fast tensor serialization (standard in the Hugging Face ecosystem).
-safetensors>=0.4.0
-
-# --- CLI Enhancement & User Experience ---
-# For the rich, interactive command-line interface in `inference.py`.
-rich>=13.0.0
-
-# --- Optional for Performance (Manual Install) ---
-# For optimized attention on compatible NVIDIA GPUs, install manually.
-# This is NOT a required dependency and is only needed for performance optimization.
-# >> pip install flash-attn --no-build-isolation
-#
-# flash-attn
-
-# --- Development & Testing (For Contributors) ---
-# These packages are not required for running the project, but are used
-# for development, linting, and testing. See CONTRIBUTING.md for details.
-#
-# pytest>=7.0.0
-# pytest-cov>=4.0.0
-# black>=23.0.0
-# flake8>=6.0.0
+aiohappyeyeballs==2.6.1
+tqdm==4.67.1
+python-dateutil==2.9.0.post0
+xxhash==3.5.0
+tokenizers==0.21.1
+pip==25.1.1
+Jinja2==3.1.4
+six==1.17.0
+pytz==2025.2
+numpy==2.1.2
+pyarrow==20.0.0
+pydantic==2.11.5
+setproctitle==1.3.6
+idna==3.10
+charset-normalizer==3.4.2
+triton==3.3.1
+packaging==25.0
+safetensors==0.5.3
+filelock==3.13.1
+async-timeout==5.0.1
+requests==2.32.4
+setuptools==59.6.0
+attrs==25.3.0
+GitPython==3.1.44
+sympy==1.13.3
+PyYAML==6.0.2
+pydantic_core==2.33.2
+gitdb==4.0.12
+certifi==2025.4.26
+sentry-sdk==2.30.0
+annotated-types==0.7.0
+aiohttp==3.12.12
+dill==0.3.8
+networkx==3.3
+wandb==0.20.1
+torchaudio==2.7.1
+yarl==1.20.1
+click==8.2.1
+protobuf==6.31.1
+propcache==0.3.2
+pillow==11.0.0
+tzdata==2025.2
+smmap==5.0.2
+mpmath==1.3.0
+multiprocess==0.70.16
+fsspec==2024.6.1
+torch==2.7.1+cu128
+MarkupSafe==2.1.5
+frozenlist==1.7.0
+platformdirs==4.3.8
+urllib3==2.4.0
+psutil==7.0.0
+typing-inspection==0.4.1
+pandas==2.3.0
+huggingface-hub==0.33.0
+typing_extensions==4.12.2
+datasets==3.6.0
+torchvision==0.22.1
+hf-xet==1.1.3
+multidict==6.4.4
+aiosignal==1.3.2
