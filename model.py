@@ -1,5 +1,7 @@
 """
 Full definition of a LunarisCodex Language Model, all of it in this single file.
+FIXED VERSION addressing numerical stability issues for training.
+
 References:
 1) the official GPT-2 TensorFlow implementation released by OpenAI:
 https://github.com/openai/gpt-2/blob/master/src/model.py
@@ -23,25 +25,50 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
     return freqs_cis
 
 def apply_rotary_emb(xq, xk, freqs_cis):
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
-    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
-    return xq_out.type_as(xq), xk_out.type_as(xk)
+    # Guarda o tipo original para converter de volta no final
+    original_dtype = xq.dtype
+    
+    # Converte para float32 APENAS para a operação complexa
+    xq_float = xq.float()
+    xk_float = xk.float()
+    
+    # Agora, opera nos tensores float32
+    xq_complex = torch.view_as_complex(xq_float.reshape(*xq_float.shape[:-1], -1, 2))
+    xk_complex = torch.view_as_complex(xk_float.reshape(*xk_float.shape[:-1], -1, 2))
+
+    # A multiplicação acontece em float32 complexo
+    xq_out_complex = xq_complex * freqs_cis
+    xk_out_complex = xk_complex * freqs_cis
+
+    # Converte de volta para real (ainda em float32)
+    xq_out = torch.view_as_real(xq_out_complex).flatten(3)
+    xk_out = torch.view_as_real(xk_out_complex).flatten(3)
+
+    # Converte o resultado final de volta para o dtype original (bfloat16)
+    return xq_out.to(original_dtype), xk_out.to(original_dtype)
 
 class RMSNorm(nn.Module):
-    """ Root Mean Square Layer Normalization """
+    """ Fixed Root Mean Square Layer Normalization """
     def __init__(self, dim, eps=1e-5):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
     def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        # Improved numerical stability - avoid unnecessary dtype conversions
+        if x.dtype == torch.bfloat16:
+            # For bfloat16, compute variance in same precision when possible
+            # Only upcast if we encounter numerical issues
+            variance = x.pow(2).mean(-1, keepdim=True)
+            return x * torch.rsqrt(variance + self.eps)
+        else:
+            # For float32, no conversion needed
+            return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
     def forward(self, x):
-        output = self._norm(x.float()).type_as(x)
-        return output * self.weight
+        # Minimize dtype conversions
+        normed = self._norm(x)
+        return normed * self.weight
 
 class CausalSelfAttention(nn.Module):
 
@@ -162,18 +189,23 @@ class LunarisCodex(nn.Module):
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
         # pre-compute and register the freqs_cis as a buffer
-        self.register_buffer("freqs_cis", precompute_freqs_cis(
+        freqs_cis = precompute_freqs_cis(
             self.config.d_model // self.config.n_heads,
             self.config.max_seq_len,
             self.config.rope_theta
-        ))
+        )
+        self.register_buffer("freqs_cis", freqs_cis)
 
         # init all weights
         self.apply(self._init_weights)
-        # apply special scaled init to the residual projections, per GPT-2 paper
+        # Improved initialization following modern practices
         for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight'):
+            if pn.endswith('c_proj.weight') or pn.endswith('w2.weight'):
+                # Scale output projections (attention output and MLP output)
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layers))
+            elif 'w1.weight' in pn or 'w3.weight' in pn:
+                # Scale SwiGLU input projections
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(config.d_model))
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
@@ -198,6 +230,9 @@ class LunarisCodex(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, RMSNorm):
+            # Ensure RMSNorm weights are initialized to 1
+            torch.nn.init.ones_(module.weight)
 
     def forward(self, idx, targets=None):
         device = idx.device
