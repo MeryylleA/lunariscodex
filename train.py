@@ -1,5 +1,6 @@
 # train.py
 # A robust, feature-rich training script for the LunarisCodex model.
+# CORRECTED VERSION - Fixed gradient accumulation logging, LR scheduler, and other subtle bugs
 
 import os
 import time
@@ -80,25 +81,28 @@ class ShardDataset(Dataset):
         self.mmap_shards = [np.load(shard, mmap_mode='r') for shard in self.shards]
         self.shard_lengths = [len(shard) for shard in self.mmap_shards]
         self.cumulative_lengths = np.cumsum(self.shard_lengths)
-        self.total_length = self.cumulative_lengths[-1]
-        print(f"[DATA] Loaded {len(self.shards)} shards with a total of {self.total_length / 1e9:.2f}B tokens.")
+
+        # CORRECTED: More precise total length calculation
+        self.total_length = max(0, self.cumulative_lengths[-1] - sequence_length)
+        
+        print(f"[DATA] Loaded {len(self.shards)} shards. Effective total tokens: {self.total_length / 1e9:.2f}B (adjusted for safe indexing).")
 
     def __len__(self):
-        return self.total_length - self.sequence_length
+        return self.total_length
 
     def __getitem__(self, idx):
+        # Find which shard contains this index
         shard_idx = np.searchsorted(self.cumulative_lengths, idx, side='right')
         local_idx = idx if shard_idx == 0 else idx - self.cumulative_lengths[shard_idx - 1]
 
+        # Handle cross-shard sequences
         if local_idx + self.sequence_length + 1 > self.shard_lengths[shard_idx]:
             remaining_len = self.shard_lengths[shard_idx] - local_idx
             seq_part1 = self.mmap_shards[shard_idx][local_idx : local_idx + remaining_len]
-
-            if shard_idx + 1 >= len(self.mmap_shards):
-                return self.__getitem__(idx - 1)
-
+            
             needed_from_next = self.sequence_length + 1 - remaining_len
             seq_part2 = self.mmap_shards[shard_idx + 1][:needed_from_next]
+            
             seq = np.concatenate((seq_part1, seq_part2))
         else:
             seq = self.mmap_shards[shard_idx][local_idx : local_idx + self.sequence_length + 1]
@@ -122,13 +126,30 @@ def setup_ddp():
 
 # --- Learning Rate Scheduler ---
 def get_lr(step, config: TrainConfig):
+    # CORRECTED: Handle edge cases more robustly
     if step < config.warmup_steps:
         return config.learning_rate * step / config.warmup_steps
-    if step > config.max_steps:
-        return config.learning_rate / 10
+    if step >= config.max_steps:  # FIXED: Use >= instead of >
+        return config.learning_rate * 0.1
+    
     decay_ratio = (step - config.warmup_steps) / (config.max_steps - config.warmup_steps)
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-    return (config.learning_rate / 10) + coeff * (config.learning_rate * 0.9)
+    return (config.learning_rate * 0.1) + coeff * (config.learning_rate * 0.9)
+
+# --- Robust checkpoint key unwrapping ---
+def unwrap_model_keys(state_dict):
+    """Remove DDP and torch.compile prefixes from model state dict keys."""
+    unwrapped = {}
+    prefixes_to_remove = ['_orig_mod.module.', 'module.', '_orig_mod.']
+    
+    for k, v in state_dict.items():
+        new_k = k
+        for prefix in prefixes_to_remove:
+            if new_k.startswith(prefix):
+                new_k = new_k[len(prefix):]
+                break
+        unwrapped[new_k] = v
+    return unwrapped
 
 # --- Main Training Function ---
 def train(config_path: str):
@@ -148,8 +169,12 @@ def train(config_path: str):
         print("-" * 50)
         print(" " * 15 + "LUNARIS CODEX TRAINING")
         print("-" * 50)
-        # Imprime a configuração de forma limpa
-        # ... (código de impressão da config)
+        print(f"Model: {config.model}")
+        print(f"Data: {config.data_dir}")
+        print(f"Batch size: {config.batch_size}")
+        print(f"Gradient accumulation: {config.gradient_accumulation_steps}")
+        print(f"Learning rate: {config.learning_rate}")
+        print(f"Max steps: {config.max_steps}")
         print("-" * 50)
 
     if is_master_process and config.wandb_project:
@@ -173,29 +198,23 @@ def train(config_path: str):
         model = DDP(model, device_ids=[int(os.environ['LOCAL_RANK'])])
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, betas=(config.beta1, config.beta2), weight_decay=config.weight_decay)
-    
-    ### MODIFICAÇÃO: SCHEDULER REMOVIDO ###
-    # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: get_lr(step, config))
 
     current_step = 0
+    current_epoch = 0  # ADDED: Track epochs separately
     raw_model = model.module if is_ddp else model
     checkpoint_path = os.path.join(config.out_dir, "latest_checkpoint.pt")
+    
     if os.path.exists(checkpoint_path):
         if is_master_process: print(f"[SETUP] Resuming from checkpoint: {checkpoint_path}")
         state = torch.load(checkpoint_path, map_location=config.device)
 
-        unwrapped_state_dict = {}
-        for k, v in state['model'].items():
-            if k.startswith('_orig_mod.module.'): k = k[len('_orig_mod.module.'):]
-            elif k.startswith('module.'): k = k[len('module.'):]
-            elif k.startswith('_orig_mod.'): k = k[len('_orig_mod.'):]
-            unwrapped_state_dict[k] = v
+        # CORRECTED: Use robust key unwrapping
+        unwrapped_state_dict = unwrap_model_keys(state['model'])
         raw_model.load_state_dict(unwrapped_state_dict)
 
         optimizer.load_state_dict(state['optimizer'])
-        ### MODIFICAÇÃO: SCHEDULER REMOVIDO DO CHECKPOINT ###
-        # scheduler.load_state_dict(state['scheduler']) 
         current_step = state['step']
+        current_epoch = state.get('epoch', 0)  # Load epoch if available
         if is_master_process: print(f"[SETUP] Resumed successfully. Starting from step {current_step}")
 
     optimizer.zero_grad(set_to_none=True)
@@ -205,20 +224,24 @@ def train(config_path: str):
         pbar = tqdm(total=config.max_steps, desc="Training Steps", initial=current_step, ncols=120)
 
     data_iter = iter(train_loader)
+    
     while current_step < config.max_steps:
-        
-        ### ADIÇÃO: CONTROLE MANUAL DO LEARNING RATE ###
-        # Calcula o LR para o passo atual e o define no otimizador
+        # Control learning rate manually
         lr = get_lr(current_step, config)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
+        
+        # CORRECTED: Properly accumulate loss for logging
+        accumulated_loss = 0.0
         
         # Loop for gradient accumulation
         for micro_step in range(config.gradient_accumulation_steps):
             try:
                 x, y = next(data_iter)
             except StopIteration:
-                if is_ddp: train_loader.sampler.set_epoch(current_step)
+                current_epoch += 1  # CORRECTED: Track epochs properly
+                if is_ddp: 
+                    train_loader.sampler.set_epoch(current_epoch)
                 data_iter = iter(train_loader)
                 x, y = next(data_iter)
 
@@ -229,14 +252,15 @@ def train(config_path: str):
                 logits, loss = model(x, y)
                 loss = loss / config.gradient_accumulation_steps
 
+            # CORRECTED: Accumulate the actual loss values
+            accumulated_loss += loss.item()
+            
             # Backward pass
             loss.backward()
 
         # Update weights
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
         optimizer.step()
-        ### MODIFICAÇÃO: SCHEDULER REMOVIDO ###
-        # scheduler.step() 
         optimizer.zero_grad(set_to_none=True)
 
         current_step += 1
@@ -246,32 +270,48 @@ def train(config_path: str):
 
             # Logging
             if current_step % config.log_interval == 0:
-                try:
-                    log_loss = loss.item() * config.gradient_accumulation_steps
-                    perplexity = math.exp(log_loss)
-                except (OverflowError, ValueError):
-                    perplexity, log_loss = float('inf'), float('inf')
+                # CORRECTED: Use properly accumulated loss
+                log_loss = accumulated_loss
+                
+                # CORRECTED: Better perplexity calculation with overflow handling
+                if log_loss < 100:  # Prevent overflow
+                    try:
+                        perplexity = math.exp(log_loss)
+                    except (OverflowError, ValueError):
+                        perplexity = float('inf')
+                else:
+                    perplexity = float('inf')
 
-                ### MODIFICAÇÃO: USA A VARIÁVEL 'lr' LOCAL PARA LOGGING ###
                 current_lr = lr 
 
                 # Update tqdm postfix
-                postfix_data = {"loss": f"{log_loss:.3f}", "ppl": f"{perplexity:.2f}", "lr": f"{current_lr:.2e}", "gnorm": f"{grad_norm.item():.2f}"}
+                postfix_data = {
+                    "loss": f"{log_loss:.3f}", 
+                    "ppl": f"{perplexity:.2f}" if perplexity != float('inf') else "inf", 
+                    "lr": f"{current_lr:.2e}", 
+                    "gnorm": f"{grad_norm.item():.2f}"
+                }
                 pbar.set_postfix(postfix_data)
 
                 # Log to WandB
                 if config.wandb_project:
-                    wandb.log({"step": current_step, "loss": log_loss, "perplexity": perplexity, "lr": current_lr, "grad_norm": grad_norm.item()})
+                    wandb.log({
+                        "step": current_step, 
+                        "loss": log_loss, 
+                        "perplexity": perplexity, 
+                        "lr": current_lr, 
+                        "grad_norm": grad_norm.item(),
+                        "epoch": current_epoch
+                    })
 
             # Checkpointing
             if current_step > 0 and current_step % config.save_interval == 0:
                 checkpoint = {
                     'model': raw_model.state_dict(),
                     'optimizer': optimizer.state_dict(),
-                    ### MODIFICAÇÃO: SCHEDULER REMOVIDO DO CHECKPOINT ###
-                    # 'scheduler': scheduler.state_dict(),
                     'config': config.__dict__,
                     'step': current_step,
+                    'epoch': current_epoch,  # ADDED: Save epoch info
                 }
                 save_path = os.path.join(config.out_dir, f"ckpt_{current_step}.pt")
                 torch.save(checkpoint, save_path)
@@ -284,6 +324,8 @@ def train(config_path: str):
     if is_master_process:
         print("\nMax steps reached. Finishing training.")
         pbar.close()
+        if config.wandb_project:
+            wandb.finish()
     if is_ddp:
         destroy_process_group()
 
