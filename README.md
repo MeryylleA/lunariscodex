@@ -123,7 +123,7 @@ data_dir: "path/to/your/npy_shards/" # IMPORTANT: Point this to your directory o
 learning_rate: 2.0e-4    # Peak learning rate. Tune this carefully. (train.py default: 3e-4)
 weight_decay: 0.1        # Weight decay for AdamW optimizer (train.py default: 0.1).
 # beta1: 0.9             # AdamW beta1 (train.py default: 0.9)
-# beta2: 0.95            # AdamW beta2 (train.py default: 0.95)
+# beta2: 0.999            # AdamW beta2
 
 # --- Scheduler Configuration ---
 # The scheduler uses a linear warmup followed by a cosine decay.
