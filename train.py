@@ -126,15 +126,15 @@ def setup_ddp():
 
 # --- Learning Rate Scheduler ---
 def get_lr(step, config: TrainConfig):
-    # CORRECTED: Handle edge cases more robustly
+    # CORRECTED: Lower minimum LR floor for better fine-tuning
     if step < config.warmup_steps:
         return config.learning_rate * step / config.warmup_steps
-    if step >= config.max_steps:  # FIXED: Use >= instead of >
-        return config.learning_rate * 0.1
+    if step >= config.max_steps:
+        return config.learning_rate * 0.01  # Lower floor
     
     decay_ratio = (step - config.warmup_steps) / (config.max_steps - config.warmup_steps)
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-    return (config.learning_rate * 0.1) + coeff * (config.learning_rate * 0.9)
+    return (config.learning_rate * 0.01) + coeff * (config.learning_rate * 0.99)
 
 # --- Robust checkpoint key unwrapping ---
 def unwrap_model_keys(state_dict):
