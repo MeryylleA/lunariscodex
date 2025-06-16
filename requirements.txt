@@ -1,61 +1,47 @@
-aiohappyeyeballs==2.6.1
-tqdm==4.67.1
-python-dateutil==2.9.0.post0
-xxhash==3.5.0
-tokenizers==0.21.1
-pip==25.1.1
-Jinja2==3.1.6
-six==1.17.0
-pytz==2025.2
-numpy==2.1.2
-pyarrow==20.0.0
-pydantic==2.11.5
-setproctitle==1.3.6
-idna==3.10
-charset-normalizer==3.4.2
-triton==3.3.1
-packaging==25.0
-safetensors==0.5.3
-filelock==3.13.1
-async-timeout==5.0.1
-requests==2.32.4
-setuptools==78.1.1
-attrs==25.3.0
-GitPython==3.1.44
-sympy==1.13.3
-PyYAML==6.0.2
-pydantic_core==2.33.2
-gitdb==4.0.12
-certifi==2025.4.26
-sentry-sdk==2.30.0
-annotated-types==0.7.0
-aiohttp==3.12.12
-dill==0.3.8
-networkx==3.3
-wandb==0.20.1
-torchaudio==2.7.1
-yarl==1.20.1
-click==8.2.1
-protobuf==6.31.1
-propcache==0.3.2
-pillow==11.0.0
-tzdata==2025.2
-smmap==5.0.2
-mpmath==1.3.0
-multiprocess==0.70.16
-fsspec==2024.6.1
+# ===== MACHINE LEARNING & DEEP LEARNING =====
 torch==2.7.1+cu128
-MarkupSafe==2.1.5
-frozenlist==1.7.0
-platformdirs==4.3.8
-urllib3==2.4.0
-psutil==7.0.0
-typing-inspection==0.4.1
-pandas==2.3.0
-huggingface-hub==0.33.0
-typing_extensions==4.12.2
-datasets==3.6.0
+torchaudio==2.7.1
 torchvision==0.22.1
-hf-xet==1.1.3
-multidict==6.4.4
-aiosignal==1.3.2
+triton==3.3.1
+
+# ===== HUGGING FACE ECOSYSTEM =====
+huggingface-hub==0.33.0
+datasets==3.6.0
+tokenizers==0.21.1
+safetensors==0.5.3
+
+# ===== DATA PROCESSING =====
+numpy==2.1.2
+pandas==2.3.0
+pyarrow==20.0.0
+
+# ===== UTILITIES =====
+tqdm==4.67.1
+click==8.2.1
+pydantic==2.11.5
+PyYAML==6.0.2
+
+# ===== HTTP & NETWORKING =====
+requests==2.32.4
+aiohttp==3.12.12
+
+# ===== EXPERIMENT TRACKING =====
+wandb==0.20.1
+sentry-sdk==2.30.0
+
+# ===== VERSION CONTROL =====
+GitPython==3.1.44
+
+# ===== IMAGE PROCESSING =====
+pillow==11.0.0
+
+# ===== TEMPLATE ENGINE =====
+Jinja2==3.1.6
+
+# ===== DATE/TIME =====
+python-dateutil==2.9.0.post0
+pytz==2025.2
+
+# ===== SYSTEM UTILITIES =====
+psutil==7.0.0
+setproctitle==1.3.6
