@@ -23,7 +23,7 @@ PyYAML==6.0.2
 
 # ===== HTTP & NETWORKING =====
 requests==2.32.4
-aiohttp==3.12.12
+aiohttp==3.12.13
 
 # ===== EXPERIMENT TRACKING =====
 wandb==0.20.1
