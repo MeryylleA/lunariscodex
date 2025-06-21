@@ -61,13 +61,26 @@ class TrainConfig:
 
     @classmethod
     def from_yaml(cls, path: str):
-        """Loads configuration from a YAML file."""
+        """Loads configuration from a YAML file, ensuring correct types."""
         with open(path, 'r') as f:
             config_dict = yaml.safe_load(f)
+
         model_config_dict = config_dict.pop("model", {})
         model_config = LunarisCodexConfig(**model_config_dict)
         config_dict['model'] = model_config
+
+        float_fields = ['learning_rate', 'weight_decay', 'beta1', 'beta2', 'grad_clip']
+        int_fields = ['warmup_steps', 'max_steps', 'batch_size', 'gradient_accumulation_steps', 'num_epochs', 'save_interval', 'log_interval']
+
+        for key in float_fields:
+            if key in config_dict:
+                config_dict[key] = float(config_dict[key])
+        for key in int_fields:
+            if key in config_dict:
+                config_dict[key] = int(config_dict[key])
+
         return cls(**config_dict)
+
 
 # --- Sharded Memory-Mapped Dataset ---
 class ShardDataset(Dataset):
