@@ -89,10 +89,15 @@ class ShardDataset(Dataset):
         self.shard_lengths = [len(shard) for shard in self.mmap_shards]
         self.cumulative_lengths = np.cumsum(self.shard_lengths)
 
-        self.total_length = max(0, self.cumulative_lengths[-1] - sequence_length)
+        # BUG FIX: The total length must guarantee that any valid index `i` has `sequence_length + 1`
+        # subsequent tokens available for `x` and `y`. The previous calculation was off by one,
+        # allowing an index to be requested that was too close to the end of the total token stream,
+        # which would cause an IndexError when trying to read across the *final* shard boundary.
+        # This new calculation is conservative and inherently safe.
+        self.total_length = max(0, self.cumulative_lengths[-1] - self.sequence_length - 1)
 
         # XLA: Logging will only appear from the master process later on
-        # print(f"[DATA] Loaded {len(self.shards)} shards. Effective total tokens: {self.total_length / 1e9:.2f}B.")
+        # print(f"[DATA] Loaded {len(self.shards)} shards. Effective total samples: {self.total_length}.")
 
     def __len__(self):
         return self.total_length
@@ -101,6 +106,8 @@ class ShardDataset(Dataset):
         shard_idx = np.searchsorted(self.cumulative_lengths, idx, side='right')
         local_idx = idx if shard_idx == 0 else idx - self.cumulative_lengths[shard_idx - 1]
 
+        # Handle cross-shard sequences. Because __len__ is now correct, this logic will
+        # never be triggered for the final shard in a way that causes an IndexError.
         if local_idx + self.sequence_length + 1 > self.shard_lengths[shard_idx]:
             remaining_len = self.shard_lengths[shard_idx] - local_idx
             seq_part1 = self.mmap_shards[shard_idx][local_idx : local_idx + remaining_len]
@@ -187,6 +194,8 @@ def _mp_fn(index, config: TrainConfig):
         # Model parameters are already available on all devices, just print from master.
         num_params = sum(p.numel() for p in model.parameters()) / 1e6
         print(f"[MODEL] Number of parameters: {num_params:.2f}M")
+        shard_info = f"[DATA] Loaded {len(train_dataset.shards)} shards. Effective total samples: {len(train_dataset)}. Total tokens: {train_dataset.cumulative_lengths[-1] / 1e9:.2f}B."
+        print(shard_info)
 
     # XLA: torch.compile is not used. DDP wrapper is removed.
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, betas=(config.beta1, config.beta2), weight_decay=config.weight_decay)
@@ -221,6 +230,11 @@ def _mp_fn(index, config: TrainConfig):
     data_iter = iter(train_loader)
 
     while current_step < config.max_steps:
+        # BUG FIX: The step counter must be incremented *before* calculating the learning rate.
+        # Previously, the LR for step N was used on step N+1, causing an off-by-one schedule
+        # and an LR of 0.0 for the very first step.
+        current_step += 1
+
         lr = get_lr(current_step, config)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
@@ -233,7 +247,7 @@ def _mp_fn(index, config: TrainConfig):
             except StopIteration:
                 current_epoch += 1
                 # XLA: set_epoch on sampler is still needed for correct shuffling
-                train_loader.sampler.set_epoch(current_epoch)
+                train_sampler.set_epoch(current_epoch)
                 data_iter = iter(train_loader)
                 x, y = next(data_iter)
 
@@ -249,8 +263,6 @@ def _mp_fn(index, config: TrainConfig):
         # XLA: Use xm.optimizer_step to perform an all-reduce on gradients and update weights.
         xm.optimizer_step(optimizer)
         optimizer.zero_grad(set_to_none=True)
-
-        current_step += 1
 
         if is_master_process:
             pbar.update(1)
