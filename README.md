@@ -168,6 +168,145 @@ Good luck, and we're excited to see what you build with Lunaris Codex!
 
 ---
 
+## Bonus Tutorial: Training on Google Cloud TPUs with `train_tpu.py`
+
+This section provides a self-contained guide for users who want to leverage the power of Google Cloud TPUs for training. It utilizes a dedicated `train_tpu.py` script (not yet provided in the current project structure, but assumed for this tutorial) and requires a specific environment setup with PyTorch/XLA.
+
+**Step 1: Environment Setup on a Cloud TPU VM**
+
+Start with a fresh Google Cloud TPU VM.
+
+1.  Clone the project repository:
+    ```bash
+    git clone https://github.com/MeryylleA/lunariscodex.git
+    ```
+2.  Navigate into the project directory:
+    ```bash
+    cd lunariscodex
+    ```
+3.  Create and activate a Python virtual environment:
+    ```bash
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+
+**Step 2: Install TPU-Specific Dependencies**
+
+Installing PyTorch/XLA for TPUs is a critical two-step process, different from the standard GPU setup.
+
+1.  First, install the correct `torch` and `torch_xla` versions compatible with your TPU environment. Always refer to the official PyTorch/XLA documentation for the latest recommended versions.
+    ```bash
+    # Install torch and torch_xla with the TPU backend extras.
+    # NOTE: Always check the official PyTorch/XLA repo for the latest stable version.
+    pip install torch==2.7.0 'torch_xla[tpu]==2.7.0'
+    ```
+2.  Second, install the remaining project dependencies from the TPU-specific requirements file:
+    ```bash
+    pip install -r requirements_tpu.txt
+    ```
+
+**Step 3: Prepare Sample Data to Test the Pipeline**
+
+Before training on your large-scale dataset prepared in Phase 1, it's a good practice to run a quick test with dummy data to ensure the TPU environment and training pipeline are set up correctly. This step helps verify the setup without processing your full dataset.
+
+Create a Python script named `prepare_dummy_data.py` with the following content:
+
+```python
+# prepare_dummy_data.py
+import numpy as np
+import os
+
+print("Generating dummy data for the TPU tutorial...")
+data_dir = "data_tpu_test"
+os.makedirs(data_dir, exist_ok=True)
+
+# Create two small shards of random token IDs (e.g., vocab size 1024)
+# Each shard contains 4096 tokens.
+shard1 = np.random.randint(0, 1024, size=(4096,), dtype=np.uint16)
+shard2 = np.random.randint(0, 1024, size=(4096,), dtype=np.uint16)
+
+np.save(os.path.join(data_dir, "shard_01.npy"), shard1)
+np.save(os.path.join(data_dir, "shard_02.npy"), shard2)
+
+print(f"Dummy data for testing saved in '{data_dir}' directory.")
+```
+
+Run this script to generate the dummy data:
+```bash
+python3 prepare_dummy_data.py
+```
+
+**Step 4: Configure the TPU Training Run**
+
+Similar to the GPU workflow, TPU training is configured using a `.yaml` file. Create a file named `config_tpu.yaml` with the following minimal configuration for this tutorial:
+
+```yaml
+# config_tpu.yaml
+# A minimal configuration for a short test run on TPUs.
+
+model:
+  vocab_size: 1024  # Corresponds to the dummy data vocab
+  n_layer: 2        # Small model for quick testing
+  n_head: 2
+  n_embd: 64
+
+data_dir: "data_tpu_test/" # Point to the dummy data directory
+sequence_length: 128     # Max sequence length for dummy data
+
+learning_rate: 1e-3
+warmup_steps: 10
+max_steps: 100          # Keep this low for a quick test
+
+batch_size: 16          # This is the PER-DEVICE batch size
+
+out_dir: "checkpoints_tpu"
+log_interval: 10
+save_interval: 50         # Save once during this short run
+wandb_project: null       # Disable wandb for this tutorial
+```
+
+**Step 5: Launch the Training on All TPU Cores**
+
+The `train_tpu.py` script leverages the PyTorch/XLA Process Spawner (`xmp.spawn`), which automatically detects and utilizes all available TPU cores on the VM for distributed training.
+
+Launch the training using the following command:
+```bash
+python3 train_tpu.py config_tpu.yaml
+```
+
+**Step 6: Expected Output**
+
+After launching the training, you should observe the following in your terminal:
+
+*   A message indicating the start of XLA multiprocessing spawn.
+*   Log output from the master process (rank 0) detailing the model configuration, total batch size (per-device batch size multiplied by the number of TPU cores), and other setup details.
+*   A `tqdm` progress bar showing aggregated training metrics like `loss` and `ppl` (perplexity).
+*   A message indicating when a checkpoint is saved.
+*   A final message upon completion of the `max_steps`.
+
+Example output might look like this:
+```text
+Starting XLA multiprocessing spawn...
+--------------------------------------------------
+                 LUNARIS CODEX TPU TRAINING (XLA)
+--------------------------------------------------
+Model: LunarisCodexConfig(vocab_size=1024, d_model=64, n_layers=2, n_heads=2, max_seq_len=128, dropout=0.0, bias=True)
+Total batch size: 128 (16 per-device * 8 devices)
+Data directory: data_tpu_test/
+Max steps: 100
+Output directory: checkpoints_tpu
+...
+[TRAIN] Starting training from step 0 up to 100 steps...
+Training Steps: 100%|██████████| 100/100 [00:25<00:00, 4.00it/s, loss=6.921, ppl=1010.45]
+
+[CHECKPOINT] Saved checkpoint to checkpoints_tpu/ckpt_100.pt
+Max steps reached. Finishing training.
+```
+
+This concludes the bonus tutorial for getting started with TPU training. Remember to adapt the configuration and data paths when using your own large-scale datasets.
+
+---
+
 ## Best Practices for Pre-training
 
 Achieving optimal results when pre-training large language models requires careful attention to various aspects of the process. Here are some best practices to consider when using Lunaris Codex:
