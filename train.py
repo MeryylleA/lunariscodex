@@ -8,6 +8,7 @@ import math
 import glob
 from dataclasses import dataclass, field
 from typing import Optional
+from contextlib import nullcontext
 
 import yaml
 import torch
@@ -82,10 +83,14 @@ class ShardDataset(Dataset):
         self.shard_lengths = [len(shard) for shard in self.mmap_shards]
         self.cumulative_lengths = np.cumsum(self.shard_lengths)
 
-        # CORRECTED: More precise total length calculation
-        self.total_length = max(0, self.cumulative_lengths[-1] - sequence_length)
-        
-        print(f"[DATA] Loaded {len(self.shards)} shards. Effective total tokens: {self.total_length / 1e9:.2f}B (adjusted for safe indexing).")
+        # BUG FIX: The total length must guarantee that any valid index `i` has `sequence_length + 1`
+        # subsequent tokens available for `x` and `y`. The previous calculation was off by one,
+        # allowing an index to be requested that was too close to the end of the total token stream,
+        # which would cause an IndexError when trying to read across the *final* shard boundary.
+        # This new calculation is conservative and inherently safe.
+        self.total_length = max(0, self.cumulative_lengths[-1] - self.sequence_length - 1)
+
+        print(f"[DATA] Loaded {len(self.shards)} shards. Effective total samples: {self.total_length}. Total tokens: {self.cumulative_lengths[-1] / 1e9:.2f}B.")
 
     def __len__(self):
         return self.total_length
@@ -95,14 +100,15 @@ class ShardDataset(Dataset):
         shard_idx = np.searchsorted(self.cumulative_lengths, idx, side='right')
         local_idx = idx if shard_idx == 0 else idx - self.cumulative_lengths[shard_idx - 1]
 
-        # Handle cross-shard sequences
+        # Handle cross-shard sequences. Because __len__ is now correct, this logic will
+        # never be triggered for the final shard in a way that causes an IndexError.
         if local_idx + self.sequence_length + 1 > self.shard_lengths[shard_idx]:
             remaining_len = self.shard_lengths[shard_idx] - local_idx
             seq_part1 = self.mmap_shards[shard_idx][local_idx : local_idx + remaining_len]
-            
+
             needed_from_next = self.sequence_length + 1 - remaining_len
             seq_part2 = self.mmap_shards[shard_idx + 1][:needed_from_next]
-            
+
             seq = np.concatenate((seq_part1, seq_part2))
         else:
             seq = self.mmap_shards[shard_idx][local_idx : local_idx + self.sequence_length + 1]
@@ -131,7 +137,7 @@ def get_lr(step, config: TrainConfig):
         return config.learning_rate * step / config.warmup_steps
     if step >= config.max_steps:
         return config.learning_rate * 0.01  # Lower floor
-    
+
     decay_ratio = (step - config.warmup_steps) / (config.max_steps - config.warmup_steps)
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return (config.learning_rate * 0.01) + coeff * (config.learning_rate * 0.99)
@@ -141,7 +147,7 @@ def unwrap_model_keys(state_dict):
     """Remove DDP and torch.compile prefixes from model state dict keys."""
     unwrapped = {}
     prefixes_to_remove = ['_orig_mod.module.', 'module.', '_orig_mod.']
-    
+
     for k, v in state_dict.items():
         new_k = k
         for prefix in prefixes_to_remove:
@@ -200,81 +206,89 @@ def train(config_path: str):
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, betas=(config.beta1, config.beta2), weight_decay=config.weight_decay)
 
     current_step = 0
-    current_epoch = 0  # ADDED: Track epochs separately
+    current_epoch = 0
     raw_model = model.module if is_ddp else model
     checkpoint_path = os.path.join(config.out_dir, "latest_checkpoint.pt")
-    
+
     if os.path.exists(checkpoint_path):
         if is_master_process: print(f"[SETUP] Resuming from checkpoint: {checkpoint_path}")
         state = torch.load(checkpoint_path, map_location=config.device)
-
-        # CORRECTED: Use robust key unwrapping
         unwrapped_state_dict = unwrap_model_keys(state['model'])
         raw_model.load_state_dict(unwrapped_state_dict)
-
         optimizer.load_state_dict(state['optimizer'])
         current_step = state['step']
-        current_epoch = state.get('epoch', 0)  # Load epoch if available
+        current_epoch = state.get('epoch', 0)
         if is_master_process: print(f"[SETUP] Resumed successfully. Starting from step {current_step}")
 
     optimizer.zero_grad(set_to_none=True)
+
+    # BUG FIX: The DDP sampler must be seeded differently each epoch to ensure proper shuffling.
+    # This was missing for the first epoch (epoch 0), causing all ranks to get identical data.
+    if is_ddp:
+        train_sampler.set_epoch(current_epoch)
 
     if is_master_process:
         print(f"\n[TRAIN] Starting training from step {current_step} up to {config.max_steps} steps...")
         pbar = tqdm(total=config.max_steps, desc="Training Steps", initial=current_step, ncols=120)
 
     data_iter = iter(train_loader)
-    
+
     while current_step < config.max_steps:
+        # BUG FIX: The step counter must be incremented *before* calculating the learning rate.
+        # Previously, the LR for step N was used on step N+1, causing an off-by-one schedule
+        # and an LR of 0.0 for the very first step.
+        current_step += 1
+
         # Control learning rate manually
         lr = get_lr(current_step, config)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
-        
-        # CORRECTED: Properly accumulate loss for logging
+
         accumulated_loss = 0.0
-        
+
         # Loop for gradient accumulation
         for micro_step in range(config.gradient_accumulation_steps):
-            try:
-                x, y = next(data_iter)
-            except StopIteration:
-                current_epoch += 1  # CORRECTED: Track epochs properly
-                if is_ddp: 
-                    train_loader.sampler.set_epoch(current_epoch)
-                data_iter = iter(train_loader)
-                x, y = next(data_iter)
+            # BUG FIX: Use DDP's no_sync context manager to avoid redundant gradient all-reduces.
+            # Gradients are now synchronized only on the final micro-step, not on every one,
+            # which is a major performance improvement for distributed training.
+            is_last_micro_step = (micro_step == config.gradient_accumulation_steps - 1)
+            ddp_context = model.no_sync() if is_ddp and not is_last_micro_step else nullcontext()
 
-            x, y = x.to(config.device, non_blocking=True), y.to(config.device, non_blocking=True)
+            with ddp_context:
+                try:
+                    x, y = next(data_iter)
+                except StopIteration:
+                    current_epoch += 1
+                    if is_ddp:
+                        train_loader.sampler.set_epoch(current_epoch)
+                    data_iter = iter(train_loader)
+                    x, y = next(data_iter)
 
-            # Forward pass
-            with ctx:
-                logits, loss = model(x, y)
-                loss = loss / config.gradient_accumulation_steps
+                x, y = x.to(config.device, non_blocking=True), y.to(config.device, non_blocking=True)
 
-            # CORRECTED: Accumulate the actual loss values
-            accumulated_loss += loss.item()
-            
-            # Backward pass
-            loss.backward()
+                # Forward pass
+                with ctx:
+                    logits, loss = model(x, y)
+                    loss = loss / config.gradient_accumulation_steps
+
+                accumulated_loss += loss.item()
+
+                # Backward pass (will sync grads only if not in ddp_context)
+                loss.backward()
 
         # Update weights
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
 
-        current_step += 1
-
         if is_master_process:
             pbar.update(1)
 
             # Logging
             if current_step % config.log_interval == 0:
-                # CORRECTED: Use properly accumulated loss
                 log_loss = accumulated_loss
-                
-                # CORRECTED: Better perplexity calculation with overflow handling
-                if log_loss < 100:  # Prevent overflow
+
+                if log_loss < 100:
                     try:
                         perplexity = math.exp(log_loss)
                     except (OverflowError, ValueError):
@@ -282,24 +296,22 @@ def train(config_path: str):
                 else:
                     perplexity = float('inf')
 
-                current_lr = lr 
+                current_lr = lr
 
-                # Update tqdm postfix
                 postfix_data = {
-                    "loss": f"{log_loss:.3f}", 
-                    "ppl": f"{perplexity:.2f}" if perplexity != float('inf') else "inf", 
-                    "lr": f"{current_lr:.2e}", 
+                    "loss": f"{log_loss:.3f}",
+                    "ppl": f"{perplexity:.2f}" if perplexity != float('inf') else "inf",
+                    "lr": f"{current_lr:.2e}",
                     "gnorm": f"{grad_norm.item():.2f}"
                 }
                 pbar.set_postfix(postfix_data)
 
-                # Log to WandB
                 if config.wandb_project:
                     wandb.log({
-                        "step": current_step, 
-                        "loss": log_loss, 
-                        "perplexity": perplexity, 
-                        "lr": current_lr, 
+                        "step": current_step,
+                        "loss": log_loss,
+                        "perplexity": perplexity,
+                        "lr": current_lr,
                         "grad_norm": grad_norm.item(),
                         "epoch": current_epoch
                     })
@@ -311,7 +323,7 @@ def train(config_path: str):
                     'optimizer': optimizer.state_dict(),
                     'config': config.__dict__,
                     'step': current_step,
-                    'epoch': current_epoch,  # ADDED: Save epoch info
+                    'epoch': current_epoch,
                 }
                 save_path = os.path.join(config.out_dir, f"ckpt_{current_step}.pt")
                 torch.save(checkpoint, save_path)
