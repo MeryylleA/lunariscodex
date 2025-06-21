@@ -1,0 +1,12 @@
+# requirements_tpu.txt
+
+# General dependencies for data handling and utilities.
+# NOTE: torch and torch_xla are installed separately using the official
+# command from the PyTorch/XLA documentation.
+numpy
+PyYAML
+tqdm
+
+# Optional dependency for experiment tracking.
+# Remove this line if you are not using Weights & Biases.
+wandb
