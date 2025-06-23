@@ -92,39 +92,63 @@ class ShardDataset(Dataset):
         if not self.shards:
             raise ValueError(f"No .npy files found in directory: {data_dir}")
 
+        # Contar o número total de tokens em todos os shards
+        total_tokens = sum(np.load(shard, mmap_mode='r').shape[0] for shard in self.shards)
+        
+        # O número de amostras é o total de tokens dividido pelo tamanho da sequência.
+        # Usamos // para descartar o último pedaço parcial.
+        self.total_samples = total_tokens // self.sequence_length
+
+        print(f"[DATA] Loaded {len(self.shards)} shards. Total tokens: {total_tokens/1e9:.2f}B.")
+        print(f"[DATA] Creating {self.total_samples:,} non-overlapping samples of length {self.sequence_length}.")
+        
+        # Manter os shards abertos é ok para mmap
         self.mmap_shards = [np.load(shard, mmap_mode='r') for shard in self.shards]
         self.shard_lengths = [len(shard) for shard in self.mmap_shards]
         self.cumulative_lengths = np.cumsum(self.shard_lengths)
 
-        # BUG FIX: The total length must guarantee that any valid index `i` has `sequence_length + 1`
-        # subsequent tokens available for `x` and `y`. The previous calculation was off by one,
-        # allowing an index to be requested that was too close to the end of the total token stream,
-        # which would cause an IndexError when trying to read across the *final* shard boundary.
-        # This new calculation is conservative and inherently safe.
-        self.total_length = max(0, self.cumulative_lengths[-1] - self.sequence_length - 1)
-
-        print(f"[DATA] Loaded {len(self.shards)} shards. Effective total samples: {self.total_length}. Total tokens: {self.cumulative_lengths[-1] / 1e9:.2f}B.")
-
     def __len__(self):
-        return self.total_length
+        return self.total_samples
 
     def __getitem__(self, idx):
-        # Find which shard contains this index
-        shard_idx = np.searchsorted(self.cumulative_lengths, idx, side='right')
-        local_idx = idx if shard_idx == 0 else idx - self.cumulative_lengths[shard_idx - 1]
+        # idx agora é o ÍNDICE DO BLOCO, não a posição do token.
+        # Ex: idx=0 é o primeiro bloco, idx=1 é o segundo.
+        
+        # Calcular a posição inicial do token para este bloco
+        token_start_pos = idx * self.sequence_length
+        
+        # Encontrar em qual shard este bloco começa
+        shard_idx = np.searchsorted(self.cumulative_lengths, token_start_pos, side='right')
+        
+        # Calcular o índice local dentro do shard
+        local_start_idx = token_start_pos if shard_idx == 0 else token_start_pos - self.cumulative_lengths[shard_idx - 1]
+        
+        # O bloco de tokens para x e y (precisamos de sequence_length + 1 tokens)
+        seq_len_with_target = self.sequence_length + 1
+        
+        # Lógica para ler entre shards se necessário
+        if local_start_idx + seq_len_with_target > self.shard_lengths[shard_idx]:
+            # Parte 1 do primeiro shard
+            remaining_len = self.shard_lengths[shard_idx] - local_start_idx
+            seq_part1 = self.mmap_shards[shard_idx][local_start_idx : local_start_idx + remaining_len]
 
-        # Handle cross-shard sequences. Because __len__ is now correct, this logic will
-        # never be triggered for the final shard in a way that causes an IndexError.
-        if local_idx + self.sequence_length + 1 > self.shard_lengths[shard_idx]:
-            remaining_len = self.shard_lengths[shard_idx] - local_idx
-            seq_part1 = self.mmap_shards[shard_idx][local_idx : local_idx + remaining_len]
-
-            needed_from_next = self.sequence_length + 1 - remaining_len
-            seq_part2 = self.mmap_shards[shard_idx + 1][:needed_from_next]
-
-            seq = np.concatenate((seq_part1, seq_part2))
+            # Parte 2 do próximo shard
+            # GARANTIR que não vamos além do último shard
+            if shard_idx + 1 < len(self.mmap_shards):
+                needed_from_next = seq_len_with_target - remaining_len
+                seq_part2 = self.mmap_shards[shard_idx + 1][:needed_from_next]
+                seq = np.concatenate((seq_part1, seq_part2))
+            else: # Se for o último shard, não podemos pegar do próximo, então pegamos o que dá
+                 seq = seq_part1
         else:
-            seq = self.mmap_shards[shard_idx][local_idx : local_idx + self.sequence_length + 1]
+            # O bloco inteiro está dentro de um único shard
+            seq = self.mmap_shards[shard_idx][local_start_idx : local_start_idx + seq_len_with_target]
+        
+        # Se por algum motivo (final do dataset) a sequência for curta, fazemos padding
+        if len(seq) < seq_len_with_target:
+            pad_len = seq_len_with_target - len(seq)
+            # Usamos -1 para o padding, que será ignorado pela loss
+            seq = np.pad(seq, (0, pad_len), 'constant', constant_values=-1)
 
         seq_tensor = torch.from_numpy(seq.astype(np.int64))
         x, y = seq_tensor[:-1], seq_tensor[1:]
