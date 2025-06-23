@@ -27,11 +27,11 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
 def apply_rotary_emb(xq, xk, freqs_cis):
     # Guarda o tipo original para converter de volta no final
     original_dtype = xq.dtype
-    
+
     # Converte para float32 APENAS para a operação complexa
     xq_float = xq.float()
     xk_float = xk.float()
-    
+
     # Agora, opera nos tensores float32
     xq_complex = torch.view_as_complex(xq_float.reshape(*xq_float.shape[:-1], -1, 2))
     xk_complex = torch.view_as_complex(xk_float.reshape(*xk_float.shape[:-1], -1, 2))
@@ -55,20 +55,15 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def _norm(self, x):
-        # Improved numerical stability - avoid unnecessary dtype conversions
-        if x.dtype == torch.bfloat16:
-            # For bfloat16, compute variance in same precision when possible
-            # Only upcast if we encounter numerical issues
-            variance = x.pow(2).mean(-1, keepdim=True)
-            return x * torch.rsqrt(variance + self.eps)
-        else:
-            # For float32, no conversion needed
-            return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        # Upcast completo para float32, depois downcast do resultado
+        x_f32 = x.to(torch.float32)
+        variance = x_f32.pow(2).mean(-1, keepdim=True)
+        return (x_f32 * torch.rsqrt(variance + self.eps)).to(x.dtype)
 
     def forward(self, x):
-        # Minimize dtype conversions
-        normed = self._norm(x)
-        return normed * self.weight
+        # A função _norm agora lida com a lógica de dtype de forma robusta
+        output = self._norm(x)
+        return output * self.weight
 
 class CausalSelfAttention(nn.Module):
 
@@ -198,14 +193,6 @@ class LunarisCodex(nn.Module):
 
         # init all weights
         self.apply(self._init_weights)
-        # Improved initialization following modern practices
-        for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight') or pn.endswith('w2.weight'):
-                # Scale output projections (attention output and MLP output)
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layers))
-            elif 'w1.weight' in pn or 'w3.weight' in pn:
-                # Scale SwiGLU input projections
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(config.d_model))
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
@@ -224,15 +211,45 @@ class LunarisCodex(nn.Module):
         return n_params
 
     def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
+        """
+        Initializes weights with a consistent, modern scheme.
+        This method is called by `self.apply(self._init_weights)`.
+        """
+        # Calculate the standard deviation for scaled initialization
+        std = 0.02 / math.sqrt(2 * self.config.n_layers)
+
+        # Handle container modules first to apply specific initializations to their children.
+        # This avoids double-initialization and ensures the correct scheme is used.
+        if isinstance(module, CausalSelfAttention):
+            # Scaled initialization for all linear layers in the attention block
+            torch.nn.init.normal_(module.c_attn.weight, mean=0.0, std=std)
+            torch.nn.init.normal_(module.c_proj.weight, mean=0.0, std=std)
+            if module.c_attn.bias is not None:
+                torch.nn.init.zeros_(module.c_attn.bias)
+            if module.c_proj.bias is not None:
+                torch.nn.init.zeros_(module.c_proj.bias)
+
+        elif isinstance(module, SwiGLU):
+            # Scaled initialization for the output projection layer (w2)
+            torch.nn.init.normal_(module.w2.weight, mean=0.0, std=std)
+            # Standard initialization for the input gate layers (w1, w3)
+            torch.nn.init.normal_(module.w1.weight, mean=0.0, std=0.02)
+            torch.nn.init.normal_(module.w3.weight, mean=0.0, std=0.02)
+
+        # Handle leaf modules that are not part of the handled containers.
         elif isinstance(module, nn.Embedding):
+            # Standard initialization for token embeddings
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
         elif isinstance(module, RMSNorm):
-            # Ensure RMSNorm weights are initialized to 1
+            # Initialize RMSNorm weights to 1
             torch.nn.init.ones_(module.weight)
+        
+        # Note: We do NOT provide a generic `elif isinstance(module, nn.Linear)` rule.
+        # This is intentional. The linear layers within CausalSelfAttention and SwiGLU
+        # are already handled above. The only remaining nn.Linear is the `lm_head`,
+        # whose weights are tied to `wte` and should not be re-initialized. This
+        # strategy correctly avoids corrupting the weight tying.
 
     def forward(self, idx, targets=None):
         device = idx.device
