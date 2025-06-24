@@ -7,7 +7,7 @@ triton==3.3.1
 # ===== HUGGING FACE ECOSYSTEM =====
 huggingface-hub==0.33.0
 datasets==3.6.0
-tokenizers==0.21.1
+tokenizers==0.21.2
 safetensors==0.5.3
 
 # ===== DATA PROCESSING =====
