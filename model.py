@@ -70,15 +70,20 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.d_model % config.n_heads == 0
+
+        self.d_model = config.d_model
+        self.n_heads = config.n_heads
+        self.n_kv_heads = config.n_kv_heads if config.n_kv_heads is not None else config.n_heads
+        assert self.n_heads % self.n_kv_heads == 0, "Number of heads must be divisible by number of key-value heads"
+        self.head_dim = self.d_model // self.n_heads
+
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.d_model, 3 * config.d_model, bias=config.bias)
+        self.c_attn = nn.Linear(self.d_model, self.d_model + 2 * self.n_kv_heads * self.head_dim, bias=config.bias)
         # output projection
-        self.c_proj = nn.Linear(config.d_model, config.d_model, bias=config.bias)
+        self.c_proj = nn.Linear(self.d_model, self.d_model, bias=config.bias)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
-        self.n_heads = config.n_heads
-        self.d_model = config.d_model
         self.dropout = config.dropout
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
@@ -92,13 +97,19 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (d_model)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.d_model, dim=2)
-        k = k.view(B, T, self.n_heads, C // self.n_heads).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_heads, C // self.n_heads).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_heads, C // self.n_heads).transpose(1, 2) # (B, nh, T, hs)
+        q, k, v  = self.c_attn(x).split([self.d_model, self.n_kv_heads * self.head_dim, self.n_kv_heads * self.head_dim], dim=2)
+        q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2) # (B, nh, T, hs)
+        k = k.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2) # (B, n_kv_h, T, hs)
+        v = v.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2) # (B, n_kv_h, T, hs)
 
         # apply rotary embeddings
         q, k = apply_rotary_emb(q, k, freqs_cis)
+
+        # for GQA, repeat k and v heads to match q heads
+        if self.n_kv_heads < self.n_heads:
+            num_repeats = self.n_heads // self.n_kv_heads
+            k = k.repeat_interleave(num_repeats, dim=1)
+            v = v.repeat_interleave(num_repeats, dim=1)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -157,6 +168,7 @@ class LunarisCodexConfig:
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layers: int = 12
     n_heads: int = 12
+    n_kv_heads: int = None # Number of key-value heads for GQA
     d_model: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
@@ -244,7 +256,7 @@ class LunarisCodex(nn.Module):
         elif isinstance(module, RMSNorm):
             # Initialize RMSNorm weights to 1
             torch.nn.init.ones_(module.weight)
-        
+
         # Note: We do NOT provide a generic `elif isinstance(module, nn.Linear)` rule.
         # This is intentional. The linear layers within CausalSelfAttention and SwiGLU
         # are already handled above. The only remaining nn.Linear is the `lm_head`,
