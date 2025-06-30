@@ -138,13 +138,13 @@ class SwiGLU(nn.Module):
         multiple_of = 256
         hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
 
-        self.w1 = nn.Linear(config.d_model, hidden_dim, bias=False)
-        self.w3 = nn.Linear(config.d_model, hidden_dim, bias=False)
-        self.w2 = nn.Linear(hidden_dim, config.d_model, bias=False)
+        self.gate_up_proj = nn.Linear(config.d_model, 2 * hidden_dim, bias=False)
+        self.down_proj = nn.Linear(hidden_dim, config.d_model, bias=False)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        x = self.w2(F.silu(self.w1(x)) * self.w3(x))
+        gate, up = self.gate_up_proj(x).chunk(2, dim=-1)
+        x = self.down_proj(F.silu(gate) * up)
         x = self.dropout(x)
         return x
 
@@ -242,11 +242,10 @@ class LunarisCodex(nn.Module):
                 torch.nn.init.zeros_(module.c_proj.bias)
 
         elif isinstance(module, SwiGLU):
-            # Scaled initialization for the output projection layer (w2)
-            torch.nn.init.normal_(module.w2.weight, mean=0.0, std=std)
-            # Standard initialization for the input gate layers (w1, w3)
-            torch.nn.init.normal_(module.w1.weight, mean=0.0, std=0.02)
-            torch.nn.init.normal_(module.w3.weight, mean=0.0, std=0.02)
+            # Scaled initialization for the output projection layer (down_proj)
+            torch.nn.init.normal_(module.down_proj.weight, mean=0.0, std=std)
+            # Standard initialization for the fused input gate layer (gate_up_proj)
+            torch.nn.init.normal_(module.gate_up_proj.weight, mean=0.0, std=0.02)
 
         # Handle leaf modules that are not part of the handled containers.
         elif isinstance(module, nn.Embedding):
