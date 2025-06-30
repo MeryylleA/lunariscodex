@@ -53,6 +53,7 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
+        self.bias = nn.Parameter(torch.zeros(dim))
 
     def _norm(self, x):
         # Upcast completo para float32, depois downcast do resultado
@@ -63,7 +64,7 @@ class RMSNorm(nn.Module):
     def forward(self, x):
         # A função _norm agora lida com a lógica de dtype de forma robusta
         output = self._norm(x)
-        return output * self.weight
+        return output * self.weight + self.bias
 
 class CausalSelfAttention(nn.Module):
 
@@ -253,8 +254,10 @@ class LunarisCodex(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
         elif isinstance(module, RMSNorm):
-            # Initialize RMSNorm weights to 1
+            # Initialize RMSNorm weights to 1 and bias to 0
             torch.nn.init.ones_(module.weight)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
 
         # Note: We do NOT provide a generic `elif isinstance(module, nn.Linear)` rule.
         # This is intentional. The linear layers within CausalSelfAttention and SwiGLU
