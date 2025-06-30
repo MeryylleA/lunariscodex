@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import torch.utils.checkpoint as checkpoint
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
@@ -157,11 +158,19 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(config)
         self.ln_2 = RMSNorm(config.d_model)
         self.mlp = SwiGLU(config)
+        self.use_gradient_checkpointing = config.use_gradient_checkpointing
 
-    def forward(self, x, freqs_cis):
+    def _block_forward(self, x, freqs_cis):
+        """Helper function for the forward pass, used by checkpointing."""
         x = x + self.attn(self.ln_1(x), freqs_cis)
         x = x + self.mlp(self.ln_2(x))
         return x
+
+    def forward(self, x, freqs_cis):
+        if self.training and self.use_gradient_checkpointing:
+            return checkpoint.checkpoint(self._block_forward, x, freqs_cis, use_reentrant=False)
+        else:
+            return self._block_forward(x, freqs_cis)
 
 @dataclass
 class LunarisCodexConfig:
@@ -174,6 +183,7 @@ class LunarisCodexConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     rope_theta: float = 10000.0
+    use_gradient_checkpointing: bool = False # Whether to use gradient checkpointing to save memory
 
 class LunarisCodex(nn.Module):
 
