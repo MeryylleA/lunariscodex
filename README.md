@@ -1,10 +1,12 @@
 # Lunaris Codex
 
+> **Note:** You are viewing an experimental branch of Lunaris Codex. This version includes state-of-the-art architectural features for enhanced performance and training efficiency. These features are currently under evaluation.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/discord/1138864753915854898?label=Discord&logo=discord&color=7289DA)](https://discord.gg/JNsfzEwMtC)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MeryylleA/lunariscodex)
 
-A Note on Our Foundation: The architectural foundation of Lunaris Codex is proudly built upon Andrej Karpathy's nanoGPT. We chose nanoGPT for its brilliant simplicity and clarity, which aligns perfectly with our philosophy of providing a "hackable" and understandable base. This version, however, represents a significant evolution, integrating modern enhancements like RoPE, SwiGLU, and RMSNorm to push performance and capabilities far beyond the original.
+A Note on Our Foundation: The architectural foundation of Lunaris Codex is proudly built upon Andrej Karpathy's nanoGPT. We chose nanoGPT for its brilliant simplicity and clarity, which aligns perfectly with our philosophy of providing a "hackable" and understandable base. This version, however, represents a significant evolution, integrating modern enhancements like **RoPE, Grouped Query Attention (GQA), Fused SwiGLU, and Gradient Checkpointing** to push performance and capabilities far beyond the original.
 
 **Lunaris Codex** is a streamlined, high-performance toolkit for pre-training powerful language models from scratch. This project provides a modern, Llama-style Transformer architecture and a robust, heavily optimized training script, designed for stability and maximum throughput.
 
@@ -17,15 +19,17 @@ This new version marks a significant evolution of the project, moving to an arch
 
 ## Architecture Overview
 
-Lunaris Codex is engineered for a balance of performance and clarity. Its architecture is based on the successful Llama-style models, ensuring state-of-the-art performance and training efficiency.
+Lunaris Codex is engineered for a balance of performance and clarity. Its architecture integrates several state-of-the-art features to ensure top-tier performance and training efficiency.
 
 | Component | Implementation | Benefits & Considerations |
 | :--- | :--- | :--- |
-| **Normalization** | **RMSNorm (`RMSNorm`)** | **Benefits:** Computationally efficient due to its simplicity (no mean centering) and contributes to stable training dynamics. <br> **Considerations:** Effective for large language models. |
-| **Positional Info**| **RoPE (Rotary Positional Embeddings)** (`apply_rotary_emb`, `precompute_freqs_cis`) | **Benefits:** Injects relative positional information, leading to excellent generalization across various sequence lengths. Achieved without any learned parameters, making it efficient. <br> **Considerations:** Adds computational steps during attention calculation. |
-| **FFN Activation**| **SwiGLU (`SwiGLU`)** | **Benefits:** Offers improved performance and expressiveness compared to traditional activations like ReLU or GeLU. <br> **Considerations:** Involves a gated mechanism which can increase parameter count and computational cost within the FFN block compared to simpler activations, but often justified by quality gains. |
-| **Structure** | **Pre-LayerNorm Decoder-Only Transformer (`Block`)** | **Benefits:** A standard, proven architecture for autoregressive language modeling. Pre-LayerNorm (applying normalization before attention/FFN) enhances training stability, especially for deep networks. <br> **Considerations:** Decoder-only is well-suited for generation tasks. |
-| **Embeddings** | **Tied Input/Output Token Embeddings (`wte`, `lm_head`)** | **Benefits:** Significantly reduces the model's parameter count by sharing weights between the token embedding layer and the final output layer. Can also improve model quality and training efficiency. <br> **Considerations:** Assumes a shared vocabulary representation is optimal for both input and output. |
+| **Normalization** | **RMSNorm with Learnable Bias** | **Benefits:** More expressive than standard RMSNorm. The learnable bias allows the model to learn an optimal activation mean, enhancing stability by preventing mean-shift in deep networks. |
+| **Positional Info**| **RoPE (Rotary Positional Embeddings)** | **Benefits:** Injects relative positional information, leading to excellent generalization across various sequence lengths. Achieved without any learned parameters, making it efficient. |
+| **Attention** | **Grouped Query Attention (GQA)** | **Benefits:** Drastically reduces the memory usage of the KV cache during inference by sharing Key/Value heads across groups of Query heads. This enables faster generation and larger context windows. |
+| **FFN Activation**| **SwiGLU with Fused Projection** | **Benefits:** Offers improved performance over traditional activations. The gate and up-projections are fused into a single linear layer, improving GPU performance by reducing kernel overhead. |
+| **Training** | **Gradient Checkpointing** | **Benefits:** Massively reduces VRAM usage during training by recomputing activations during the backward pass instead of storing them. This allows for training larger models or using larger batch sizes, at the cost of a small compute overhead. |
+| **Structure** | **Pre-LayerNorm Decoder-Only Transformer** | **Benefits:** A standard, proven architecture for autoregressive language modeling. Pre-LayerNorm (applying normalization before attention/FFN) enhances training stability, especially for deep networks. |
+| **Embeddings** | **Tied Input/Output Token Embeddings** | **Benefits:** Significantly reduces the model's parameter count by sharing weights between the token embedding layer and the final output layer. Can also improve model quality and training efficiency. |
 
 ---
 
@@ -92,64 +96,57 @@ pip install -r requirements.txt
 ```
 
 **2. Configure Your Training Run:**
-Create a `train_config.yaml` file. This is where you define your model architecture, hyperparameters, and data paths. Below is a well-commented example configuration to get you started. Adjust it based on your specific dataset and available hardware.
+Create a `train_config.yaml` file. This is where you define your model architecture, hyperparameters, and data paths. Below is a well-commented example configuration that shows how to use the new features.
 
 ```yaml
 # train_config.yaml
 
 # --- Model Configuration ---
 # These parameters define the architecture of your LunarisCodex model.
-# The defaults in train.py are for a smaller model (e.g., d_model: 768, n_layers: 12).
-# This example shows a moderately larger configuration.
 model:
   vocab_size: 50304      # IMPORTANT: Must exactly match your tokenizer's vocabulary size.
-                         # Example: 50304 for a GPT-2 style tokenizer, padded.
-                         # For a custom tokenizer, this might be e.g., 65536.
   d_model: 1024          # Dimensionality of the model embeddings and hidden states.
-                         # Larger values mean a bigger model. (train.py default: 768)
-  n_layers: 20           # Number of transformer blocks (layers). (train.py default: 12)
-  n_heads: 16            # Number of attention heads (must divide d_model). (train.py default: 12)
-  max_seq_len: 1024     # Maximum sequence length the model can process. (train.py default: 1024)
-                         # Ensure your data is prepared with this sequence length in mind.
-  dropout: 0.0           # Dropout rate for regularization (0.0 to disable). (train.py default: 0.0)
-                         # For larger models or longer training, consider 0.05 or 0.1.
-  # bias: True           # Whether to use bias in linear layers (default: True in model.py's LunarisCodexConfig).
+  n_layers: 20           # Number of transformer blocks (layers).
+  n_heads: 16            # Number of attention heads (must divide d_model).
+  max_seq_len: 1024     # Maximum sequence length the model can process.
+  dropout: 0.0           # Dropout rate for regularization (0.0 to disable).
+
+  # --- Advanced Architectural Features ---
+  n_kv_heads: 4          # Set to a value less than n_heads to enable Grouped Query Attention (GQA).
+                         # `n_heads` must be divisible by `n_kv_heads`. e.g., 16 heads, 4 kv_heads.
+                         # Omit this or set to null to default to standard Multi-Head Attention.
+  
+  use_gradient_checkpointing: true # Set to true to enable gradient checkpointing.
+                                   # This saves a large amount of GPU memory at the cost of
+                                   # slightly slower training iterations. Highly recommended for
+                                   # large models or large batch sizes.
 
 # --- Data Configuration ---
 data_dir: "path/to/your/npy_shards/" # IMPORTANT: Point this to your directory of sharded .npy files.
-# sequence_length: 1024  # This is implicitly set by model.max_seq_len for data loading purposes in train.py.
 
 # --- Optimizer Configuration ---
-learning_rate: 2.0e-4    # Peak learning rate. Tune this carefully. (train.py default: 3e-4)
-weight_decay: 0.1        # Weight decay for AdamW optimizer (train.py default: 0.1).
-# beta1: 0.9             # AdamW beta1 (train.py default: 0.9)
-# beta2: 0.999            # AdamW beta2
+learning_rate: 2.0e-4    # Peak learning rate. Tune this carefully.
+weight_decay: 0.1        # Weight decay for AdamW optimizer.
 
 # --- Scheduler Configuration ---
-# The scheduler uses a linear warmup followed by a cosine decay.
-warmup_steps: 2000       # Number of steps for linear learning rate warmup. (train.py default: 2000)
-                         # A common heuristic is ~1-5% of max_steps.
-max_steps: 200000        # Total number of training steps. Adjust based on your dataset size and desired epochs.
-                         # (train.py default: 600000)
+warmup_steps: 2000       # Number of steps for linear learning rate warmup.
+max_steps: 200000        # Total number of training steps.
 
 # --- Training Configuration ---
-batch_size: 32           # Per-GPU batch size. Adjust based on your VRAM. (train.py default: 16)
+batch_size: 32           # Per-GPU batch size. Adjust based on your VRAM.
 gradient_accumulation_steps: 4 # Accumulates gradients over N micro-batches.
                          # Effective batch size = batch_size * num_gpus * gradient_accumulation_steps.
-                         # (train.py default: 1)
-grad_clip: 1.0           # Gradient clipping value to prevent exploding gradients (train.py default: 1.0).
-compile_model: true      # Whether to use torch.compile for potential speedups (train.py default: True).
-                         # Set to false if you encounter issues with compilation.
+grad_clip: 1.0           # Gradient clipping value to prevent exploding gradients.
+compile_model: true      # Whether to use torch.compile for potential speedups.
 
 # --- I/O and Logging ---
-out_dir: "checkpoints/my-model-run"   # Directory to save checkpoints. (train.py default: "checkpoints")
-save_interval: 1000      # Save a checkpoint every N steps (train.py default: 1000).
-# log_interval: 20       # Log metrics to console/W&B every N steps (train.py default: 20).
+out_dir: "checkpoints/my-model-run"   # Directory to save checkpoints.
+save_interval: 1000      # Save a checkpoint every N steps.
+log_interval: 20         # Log metrics to console/W&B every N steps.
 
 # --- W&B (Weights & Biases) Configuration (Optional) ---
-# Set wandb_project to your project name to enable W&B logging.
 wandb_project: null                # Your W&B project name (e.g., "MyLunarisProject"). Keep as null or remove to disable.
-wandb_run_name: "experiment-001"   # A name for this specific run (e.g., "llama-7b-run1").
+wandb_run_name: "experiment-001"   # A name for this specific run (e.g., "gqa-llama-run1").
 # wandb_entity: null               # Your W&B entity/team name (if applicable).
 ```
 
