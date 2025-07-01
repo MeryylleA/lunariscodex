@@ -33,7 +33,7 @@ sentry-sdk==2.32.0
 GitPython==3.1.44
 
 # ===== IMAGE PROCESSING =====
-pillow==11.0.0
+pillow==11.3.0
 
 # ===== TEMPLATE ENGINE =====
 Jinja2==3.1.6
