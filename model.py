@@ -1,25 +1,34 @@
 """
+
 Full definition of a LunarisCodex Language Model, all of it in this single file.
+
 FIXED VERSION addressing numerical stability issues for training.
 
 References:
+
 1) the official GPT-2 TensorFlow implementation released by OpenAI:
+
 https://github.com/openai/gpt-2/blob/master/src/model.py
+
 2) huggingface/transformers PyTorch implementation:
+
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
+
 """
 
 import math
 import inspect
 from dataclasses import dataclass
-
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import torch.utils.checkpoint as checkpoint
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end, device=freqs.device, dtype=torch.float32)
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, device=None):
+    if device is None:
+        device = torch.device('cpu')
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, device=device).float() / dim))
+    t = torch.arange(end, device=device, dtype=torch.float32)
     freqs = torch.outer(t, freqs)
     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
     return freqs_cis
@@ -27,23 +36,18 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
 def apply_rotary_emb(xq, xk, freqs_cis):
     # Guarda o tipo original para converter de volta no final
     original_dtype = xq.dtype
-
     # Converte para float32 APENAS para a operação complexa
     xq_float = xq.float()
     xk_float = xk.float()
-
     # Agora, opera nos tensores float32
     xq_complex = torch.view_as_complex(xq_float.reshape(*xq_float.shape[:-1], -1, 2))
     xk_complex = torch.view_as_complex(xk_float.reshape(*xk_float.shape[:-1], -1, 2))
-
     # A multiplicação acontece em float32 complexo
     xq_out_complex = xq_complex * freqs_cis
     xk_out_complex = xk_complex * freqs_cis
-
     # Converte de volta para real (ainda em float32)
     xq_out = torch.view_as_real(xq_out_complex).flatten(3)
     xk_out = torch.view_as_real(xk_out_complex).flatten(3)
-
     # Converte o resultado final de volta para o dtype original (bfloat16)
     return xq_out.to(original_dtype), xk_out.to(original_dtype)
 
@@ -66,19 +70,21 @@ class RMSNorm(nn.Module):
         return output * self.weight
 
 class CausalSelfAttention(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         assert config.d_model % config.n_heads == 0
+        self.d_model = config.d_model
+        self.n_heads = config.n_heads
+        self.n_kv_heads = config.n_kv_heads if config.n_kv_heads is not None else config.n_heads
+        assert self.n_heads % self.n_kv_heads == 0, "Number of heads must be divisible by number of key-value heads"
+        self.head_dim = self.d_model // self.n_heads
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.d_model, 3 * config.d_model, bias=config.bias)
+        self.c_attn = nn.Linear(self.d_model, self.d_model + 2 * self.n_kv_heads * self.head_dim, bias=config.bias)
         # output projection
-        self.c_proj = nn.Linear(config.d_model, config.d_model, bias=config.bias)
+        self.c_proj = nn.Linear(self.d_model, self.d_model, bias=config.bias)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
-        self.n_heads = config.n_heads
-        self.d_model = config.d_model
         self.dropout = config.dropout
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
@@ -86,20 +92,22 @@ class CausalSelfAttention(nn.Module):
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
             self.register_buffer("bias", torch.tril(torch.ones(config.max_seq_len, config.max_seq_len))
-                                        .view(1, 1, config.max_seq_len, config.max_seq_len))
+                                .view(1, 1, config.max_seq_len, config.max_seq_len))
 
     def forward(self, x, freqs_cis):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (d_model)
-
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.d_model, dim=2)
-        k = k.view(B, T, self.n_heads, C // self.n_heads).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_heads, C // self.n_heads).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_heads, C // self.n_heads).transpose(1, 2) # (B, nh, T, hs)
-
+        q, k, v = self.c_attn(x).split([self.d_model, self.n_kv_heads * self.head_dim, self.n_kv_heads * self.head_dim], dim=2)
+        q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2) # (B, nh, T, hs)
+        k = k.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2) # (B, n_kv_h, T, hs)
+        v = v.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2) # (B, n_kv_h, T, hs)
         # apply rotary embeddings
         q, k = apply_rotary_emb(q, k, freqs_cis)
-
+        # for GQA, repeat k and v heads to match q heads
+        if self.n_kv_heads < self.n_heads:
+            num_repeats = self.n_heads // self.n_kv_heads
+            k = k.repeat_interleave(num_repeats, dim=1)
+            v = v.repeat_interleave(num_repeats, dim=1)
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
@@ -112,7 +120,6 @@ class CausalSelfAttention(nn.Module):
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
-
         # output projection
         y = self.resid_dropout(self.c_proj(y))
         return y
@@ -126,30 +133,36 @@ class SwiGLU(nn.Module):
         # custom multiple_of for efficiency
         multiple_of = 256
         hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-
-        self.w1 = nn.Linear(config.d_model, hidden_dim, bias=False)
-        self.w3 = nn.Linear(config.d_model, hidden_dim, bias=False)
-        self.w2 = nn.Linear(hidden_dim, config.d_model, bias=False)
+        self.gate_up_proj = nn.Linear(config.d_model, 2 * hidden_dim, bias=False)
+        self.down_proj = nn.Linear(hidden_dim, config.d_model, bias=False)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        x = self.w2(F.silu(self.w1(x)) * self.w3(x))
+        gate, up = self.gate_up_proj(x).chunk(2, dim=-1)
+        x = self.down_proj(F.silu(gate) * up)
         x = self.dropout(x)
         return x
 
 class Block(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         self.ln_1 = RMSNorm(config.d_model)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = RMSNorm(config.d_model)
         self.mlp = SwiGLU(config)
+        self.use_gradient_checkpointing = config.use_gradient_checkpointing
 
-    def forward(self, x, freqs_cis):
+    def _block_forward(self, x, freqs_cis):
+        """Helper function for the forward pass, used by checkpointing."""
         x = x + self.attn(self.ln_1(x), freqs_cis)
         x = x + self.mlp(self.ln_2(x))
         return x
+
+    def forward(self, x, freqs_cis):
+        if self.training and self.use_gradient_checkpointing:
+            return checkpoint.checkpoint(self._block_forward, x, freqs_cis, use_reentrant=False)
+        else:
+            return self._block_forward(x, freqs_cis)
 
 @dataclass
 class LunarisCodexConfig:
@@ -157,13 +170,14 @@ class LunarisCodexConfig:
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layers: int = 12
     n_heads: int = 12
+    n_kv_heads: int = None # Number of key-value heads for GQA
     d_model: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     rope_theta: float = 10000.0
+    use_gradient_checkpointing: bool = False # Whether to use gradient checkpointing to save memory
 
 class LunarisCodex(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         assert config.vocab_size is not None
@@ -187,13 +201,13 @@ class LunarisCodex(nn.Module):
         freqs_cis = precompute_freqs_cis(
             self.config.d_model // self.config.n_heads,
             self.config.max_seq_len,
-            self.config.rope_theta
+            self.config.rope_theta,
+            device=torch.device('cpu')
         )
         self.register_buffer("freqs_cis", freqs_cis)
 
         # init all weights
         self.apply(self._init_weights)
-
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
@@ -228,23 +242,19 @@ class LunarisCodex(nn.Module):
                 torch.nn.init.zeros_(module.c_attn.bias)
             if module.c_proj.bias is not None:
                 torch.nn.init.zeros_(module.c_proj.bias)
-
         elif isinstance(module, SwiGLU):
-            # Scaled initialization for the output projection layer (w2)
-            torch.nn.init.normal_(module.w2.weight, mean=0.0, std=std)
-            # Standard initialization for the input gate layers (w1, w3)
-            torch.nn.init.normal_(module.w1.weight, mean=0.0, std=0.02)
-            torch.nn.init.normal_(module.w3.weight, mean=0.0, std=0.02)
-
+            # Scaled initialization for the output projection layer (down_proj)
+            torch.nn.init.normal_(module.down_proj.weight, mean=0.0, std=std)
+            # Standard initialization for the fused input gate layer (gate_up_proj)
+            torch.nn.init.normal_(module.gate_up_proj.weight, mean=0.0, std=0.02)
         # Handle leaf modules that are not part of the handled containers.
         elif isinstance(module, nn.Embedding):
             # Standard initialization for token embeddings
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
         elif isinstance(module, RMSNorm):
             # Initialize RMSNorm weights to 1
             torch.nn.init.ones_(module.weight)
-        
+
         # Note: We do NOT provide a generic `elif isinstance(module, nn.Linear)` rule.
         # This is intentional. The linear layers within CausalSelfAttention and SwiGLU
         # are already handled above. The only remaining nn.Linear is the `lm_head`,
@@ -304,7 +314,6 @@ class LunarisCodex(nn.Module):
         extra_args = dict(fused=True) if use_fused else dict()
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
         print(f"using fused AdamW: {use_fused}")
-
         return optimizer
 
     def estimate_mfu(self, fwdbwd_per_iter, dt):
@@ -347,5 +356,4 @@ class LunarisCodex(nn.Module):
             idx_next = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
-
         return idx
