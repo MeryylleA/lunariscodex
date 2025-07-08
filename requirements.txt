@@ -12,7 +12,7 @@ safetensors==0.5.3
 
 # ===== DATA PROCESSING =====
 numpy==2.1.2
-pandas==2.3.0
+pandas==2.3.1
 pyarrow==20.0.0
 
 # ===== UTILITIES =====
