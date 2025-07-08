@@ -1,43 +1,61 @@
 # Lunaris Codex
 
-> **Note:** You are viewing an experimental branch of Lunaris Codex. This version includes state-of-the-art architectural features for enhanced performance and training efficiency. These features are currently under evaluation.
+> **Note:** You are viewing the `experimental/hybrid-attention` branch of Lunaris Codex. This version introduces a state-of-the-art hybrid attention architecture for superior long-context performance. This feature is powerful but currently under evaluation.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/discord/1138864753915854898?label=Discord&logo=discord&color=7289DA)](https://discord.gg/JNsfzEwMtC)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MeryylleA/lunariscodex)
 
-A Note on Our Foundation: The architectural foundation of Lunaris Codex is proudly built upon Andrej Karpathy's nanoGPT. We chose nanoGPT for its brilliant simplicity and clarity, which aligns perfectly with our philosophy of providing a "hackable" and understandable base. This version, however, represents a significant evolution, integrating modern enhancements like **RoPE, Grouped Query Attention (GQA), Fused SwiGLU, and Gradient Checkpointing** to push performance and capabilities far beyond the original.
+A Note on Our Foundation: The architectural foundation of Lunaris Codex is proudly built upon Andrej Karpathy's nanoGPT. We chose nanoGPT for its brilliant simplicity and clarity, which aligns perfectly with our philosophy of providing a "hackable" and understandable base. This version, however, represents a revolutionary evolution, introducing the **RNope-SWA hybrid attention architecture** - a groundbreaking approach that interleaves two specialized types of attention layers to achieve unprecedented long-context performance and training efficiency.
 
-**Lunaris Codex** is a streamlined, high-performance toolkit for pre-training powerful language models from scratch. This project provides a modern, Llama-style Transformer architecture and a robust, heavily optimized training script, designed for stability and maximum throughput.
+**Lunaris Codex** is a streamlined, high-performance toolkit for pre-training powerful language models from scratch. This experimental branch features our cutting-edge hybrid attention architecture, designed to break the quadratic complexity barrier of traditional transformers while maintaining exceptional performance across both local and global context understanding.
 
 ### Our Philosophy
-This repository is built on a simple, powerful idea: **provide a rock-solid, understandable foundation for creating strong base models.** We focus on clean, efficient, and well-documented code for the core tasks of model definition and training. This approach empowers researchers and developers to bring their own unique datasets to a proven, production-grade pipeline.
+This repository is built on a simple, powerful idea: **provide a rock-solid, understandable foundation for creating strong base models that can handle massive contexts efficiently.** We focus on clean, efficient, and well-documented code for the core tasks of model definition and training. This approach empowers researchers and developers to bring their own unique datasets to a proven, production-grade pipeline capable of processing sequences far longer than traditional architectures.
 
-This new version marks a significant evolution of the project, moving to an architecture inspired by industry-leading models like Llama and Mistral, with a strong emphasis on modern best practices.
+This experimental version marks a quantum leap in the project's evolution, introducing a hybrid architecture that combines the best of both worlds: efficient local processing and powerful global reasoning capabilities.
 
 ---
 
-## Architecture Overview
+## Architecture Overview: RNope-SWA Hybrid Attention
 
-Lunaris Codex is engineered for a balance of performance and clarity. Its architecture integrates several state-of-the-art features to ensure top-tier performance and training efficiency.
+Lunaris Codex now features the **RNope-SWA** architecture, a revolutionary hybrid attention system inspired by "Rope to Nope and Back Again." This architecture interleaves two specialized layer types to achieve superior long-context performance while maintaining computational efficiency.
+
+### The Hybrid Architecture
+
+Our model alternates between two distinct types of transformer layers, each optimized for different aspects of language understanding:
+
+| Layer Type | Implementation | Role & Benefits |
+| :--- | :--- | :--- |
+| **RoPE + Sliding Window Attention (SWA)** | **Local Specialist Layers** | **Role:** Handle local context, syntax, and short-term dependencies with exceptional efficiency. **Benefits:** Uses RoPE for relative positional encoding within a fixed window (e.g., 4096 tokens). Computational complexity of O(L×W) where W is window size, dramatically reducing memory usage for long sequences. Excels at local coherence, grammar, and immediate context understanding. |
+| **NoPE + Full Causal Attention** | **Global Retriever Layers** | **Role:** Perform content-based global reasoning without positional bias. **Benefits:** Operates without positional embeddings (NoPE), using full attention to find and connect relevant information across the entire sequence based purely on semantic similarity. Enables powerful long-range reasoning and information retrieval capabilities. |
+
+### Additional Architectural Features
 
 | Component | Implementation | Benefits & Considerations |
 | :--- | :--- | :--- |
 | **Normalization** | **RMSNorm with Learnable Bias** | **Benefits:** More expressive than standard RMSNorm. The learnable bias allows the model to learn an optimal activation mean, enhancing stability by preventing mean-shift in deep networks. |
-| **Positional Info**| **RoPE (Rotary Positional Embeddings)** | **Benefits:** Injects relative positional information, leading to excellent generalization across various sequence lengths. Achieved without any learned parameters, making it efficient. |
-| **Attention** | **Grouped Query Attention (GQA)** | **Benefits:** Drastically reduces the memory usage of the KV cache during inference by sharing Key/Value heads across groups of Query heads. This enables faster generation and larger context windows. |
 | **FFN Activation**| **SwiGLU with Fused Projection** | **Benefits:** Offers improved performance over traditional activations. The gate and up-projections are fused into a single linear layer, improving GPU performance by reducing kernel overhead. |
-| **Training** | **Gradient Checkpointing** | **Benefits:** Massively reduces VRAM usage during training by recomputing activations during the backward pass instead of storing them. This allows for training larger models or using larger batch sizes, at the cost of a small compute overhead. |
-| **Structure** | **Pre-LayerNorm Decoder-Only Transformer** | **Benefits:** A standard, proven architecture for autoregressive language modeling. Pre-LayerNorm (applying normalization before attention/FFN) enhances training stability, especially for deep networks. |
-| **Embeddings** | **Tied Input/Output Token Embeddings** | **Benefits:** Significantly reduces the model's parameter count by sharing weights between the token embedding layer and the final output layer. Can also improve model quality and training efficiency. |
+| **Training** | **Gradient Checkpointing** | **Benefits:** Massively reduces VRAM usage during training by recomputing activations during the backward pass instead of storing them. Essential for training large models with extended context lengths. |
+| **Structure** | **Pre-LayerNorm Decoder-Only Transformer** | **Benefits:** A proven architecture for autoregressive language modeling. Pre-LayerNorm enhances training stability, especially crucial for the hybrid attention setup. |
+| **Embeddings** | **Tied Input/Output Token Embeddings** | **Benefits:** Significantly reduces parameter count while improving model quality and training efficiency. |
+
+### The Hybrid Advantage
+
+This revolutionary architecture delivers several key advantages:
+
+- **Efficient Long-Context Processing:** Most layers (RoPE+SWA) operate with linear complexity relative to window size, not full sequence length
+- **Powerful Global Reasoning:** NoPE layers provide content-based attention across the entire sequence for sophisticated long-range understanding
+- **Balanced Performance:** Local specialists handle immediate context while global retrievers manage long-term dependencies
+- **Scalable Training:** Reduced computational burden enables training on much longer sequences than traditional architectures
 
 ---
 
 ## The Training Pipeline
 
-Our `train.py` script is a feature-rich and resilient trainer, meticulously engineered to handle large-scale, long-running jobs with stability and efficiency.
+Our `train.py` script is a feature-rich and resilient trainer, meticulously engineered to handle large-scale, long-running jobs with stability and efficiency, now optimized for the hybrid attention architecture.
 
-*   **Engineered for Scale:** Designed to process terabytes of data and sustain training for extended periods (days or weeks) without interruption.
+*   **Engineered for Scale:** Designed to process terabytes of data and sustain training for extended periods (days or weeks) without interruption, with special optimizations for long-context training.
 *   **Optimized Data Loading (`ShardDataset`):** Employs a memory-mapped `ShardDataset` class, which efficiently streams data from massive datasets sharded into multiple `.npy` files. This approach minimizes RAM overhead while maximizing I/O throughput.
 *   **High-Performance Training:**
     *   **Mixed-Precision:** Full support for `bfloat16` (preferred on compatible hardware) and `fp16` to accelerate training and reduce memory footprint.
@@ -63,6 +81,7 @@ We believe that data is the soul of a model. While Lunaris Codex provides the en
 1.  **Select Your Sources:**
     *   **Quality & Scale:** Prioritize high-quality, large-scale text corpora.
     *   **Diversity:** A diverse dataset (e.g., combining web text, books, code, scientific articles, and conversational data) often leads to more robust and versatile models.
+    *   **Long-Context Considerations:** With the hybrid architecture's ability to handle extended sequences, consider including datasets with longer documents to fully leverage the model's capabilities.
     *   **Examples:** Good starting points include filtered web crawls like `HuggingFaceFW/fineweb-edu` and encyclopedic sources like `wikimedia/wikipedia`. Consider what capabilities you want your model to have and select data accordingly.
 
 2.  **Train a Tokenizer:**
@@ -87,6 +106,9 @@ This is where Lunaris Codex shines. Follow these steps to launch your training r
 git clone https://github.com/MeryylleA/lunariscodex.git
 cd lunariscodex
 
+# Switch to the experimental branch
+git checkout experimental/hybrid-attention
+
 # Create and activate a virtual environment (recommended)
 python3 -m venv .venv
 source .venv/bin/activate
@@ -96,21 +118,25 @@ pip install -r requirements.txt
 ```
 
 **2. Configure Your Training Run:**
-Create a `train_config.yaml` file. This is where you define your model architecture, hyperparameters, and data paths. Below is a well-commented example configuration that shows how to use the new features.
+Create a `train_config.yaml` file. This is where you define your model architecture, hyperparameters, and data paths. Below is a well-commented example configuration that shows how to use the hybrid attention features.
 
 ```yaml
 # train_config.yaml
 
 # --- Model Configuration ---
-# These parameters define the architecture of your LunarisCodex model.
+# These parameters define the architecture of your LunarisCodex hybrid attention model.
 model:
   vocab_size: 50304      # IMPORTANT: Must exactly match your tokenizer's vocabulary size.
   d_model: 1024          # Dimensionality of the model embeddings and hidden states.
   n_layers: 20           # Number of transformer blocks (layers).
   n_heads: 16            # Number of attention heads (must divide d_model).
-  max_seq_len: 1024     # Maximum sequence length the model can process.
+  max_seq_len: 32768     # Maximum sequence length - leverage the hybrid architecture for long contexts!
   dropout: 0.0           # Dropout rate for regularization (0.0 to disable).
 
+  # --- Hybrid Attention Configuration ---
+  sliding_window_size: 4096  # Window size for RoPE+SWA layers. This defines the local attention
+                             # window for efficient processing. Should be a power of 2.
+  
   # --- Advanced Architectural Features ---
   n_kv_heads: 4          # Set to a value less than n_heads to enable Grouped Query Attention (GQA).
                          # `n_heads` must be divisible by `n_kv_heads`. e.g., 16 heads, 4 kv_heads.
@@ -119,7 +145,7 @@ model:
   use_gradient_checkpointing: true # Set to true to enable gradient checkpointing.
                                    # This saves a large amount of GPU memory at the cost of
                                    # slightly slower training iterations. Highly recommended for
-                                   # large models or large batch sizes.
+                                   # large models or large batch sizes, especially with long contexts.
 
 # --- Data Configuration ---
 data_dir: "path/to/your/npy_shards/" # IMPORTANT: Point this to your directory of sharded .npy files.
@@ -133,20 +159,20 @@ warmup_steps: 2000       # Number of steps for linear learning rate warmup.
 max_steps: 200000        # Total number of training steps.
 
 # --- Training Configuration ---
-batch_size: 32           # Per-GPU batch size. Adjust based on your VRAM.
-gradient_accumulation_steps: 4 # Accumulates gradients over N micro-batches.
+batch_size: 16           # Per-GPU batch size. Reduced for long-context training.
+gradient_accumulation_steps: 8 # Accumulates gradients over N micro-batches.
                          # Effective batch size = batch_size * num_gpus * gradient_accumulation_steps.
 grad_clip: 1.0           # Gradient clipping value to prevent exploding gradients.
 compile_model: true      # Whether to use torch.compile for potential speedups.
 
 # --- I/O and Logging ---
-out_dir: "checkpoints/my-model-run"   # Directory to save checkpoints.
+out_dir: "checkpoints/hybrid-attention-run"   # Directory to save checkpoints.
 save_interval: 1000      # Save a checkpoint every N steps.
 log_interval: 20         # Log metrics to console/W&B every N steps.
 
 # --- W&B (Weights & Biases) Configuration (Optional) ---
-wandb_project: null                # Your W&B project name (e.g., "MyLunarisProject"). Keep as null or remove to disable.
-wandb_run_name: "experiment-001"   # A name for this specific run (e.g., "gqa-llama-run1").
+wandb_project: null                # Your W&B project name (e.g., "HybridAttentionExperiment"). Keep as null or remove to disable.
+wandb_run_name: "rnope-swa-001"    # A name for this specific run (e.g., "hybrid-32k-context").
 # wandb_entity: null               # Your W&B entity/team name (if applicable).
 ```
 
@@ -161,13 +187,13 @@ torchrun --standalone --nproc_per_node=auto train.py train_config.yaml
 ```
 The script will handle the rest: setting up distributed training (if applicable), compiling the model (if enabled), loading data, running the training loop, logging to the console and W&B (if configured), and saving checkpoints.
 
-Good luck, and we're excited to see what you build with Lunaris Codex!
+Good luck, and we're excited to see what you build with the revolutionary hybrid attention architecture of Lunaris Codex!
 
 ---
 
 ### Phase 3: Training on Google Cloud TPUs with `train_tpu.py` (Alternative)
 
-For users with access to Google Cloud TPUs, Lunaris Codex provides `train_tpu.py`, a dedicated script optimized for training on these powerful accelerators using PyTorch/XLA. This offers an alternative to GPU-based training, often enabling larger scale experiments.
+For users with access to Google Cloud TPUs, Lunaris Codex provides `train_tpu.py`, a dedicated script optimized for training on these powerful accelerators using PyTorch/XLA. This offers an alternative to GPU-based training, often enabling larger scale experiments with the hybrid attention architecture.
 
 **Prerequisites:**
 
@@ -181,6 +207,9 @@ Ensure you have cloned the repository and installed requirements on your TPU VM,
 # Clone the repository (if not already done)
 # git clone https://github.com/MeryylleA/lunariscodex.git
 # cd lunariscodex
+
+# Switch to the experimental branch
+# git checkout experimental/hybrid-attention
 
 # Create and activate a virtual environment (recommended)
 # python3 -m venv .venv
@@ -220,79 +249,89 @@ By leveraging PyTorch/XLA, `train_tpu.py` abstracts away many of the low-level c
 
 ---
 
-## Best Practices for Pre-training
+## Best Practices for Pre-training with Hybrid Attention
 
-Achieving optimal results when pre-training large language models requires careful attention to various aspects of the process. Here are some best practices to consider when using Lunaris Codex:
+Achieving optimal results when pre-training large language models with the hybrid attention architecture requires careful attention to various aspects of the process. Here are some best practices specific to the RNope-SWA architecture:
 
 *   **Data Quality and Diversity**:
     *   **Foundation First**: The performance, capabilities, and biases of your model are overwhelmingly determined by your training data. "Garbage in, garbage out" very much applies.
     *   **Prioritize Quality**: Use high-quality, well-cleaned, and diverse datasets. Invest time in preprocessing your data, which can include deduplication, filtering inappropriate content, and ensuring consistent formatting.
+    *   **Long-Context Advantage**: With the hybrid architecture's ability to handle extended sequences efficiently, include datasets with longer documents to fully leverage the model's capabilities.
     *   **Diversity Matters**: A model trained on diverse text (e.g., web crawls, books, code, scientific papers, conversational text) will generally be more robust and adaptable.
+
+*   **Hybrid Architecture Specific Considerations**:
+    *   **Sliding Window Size**: The `sliding_window_size` parameter is crucial. A value of 4096 is a good starting point, but you may experiment with values like 2048 or 8192 depending on your use case and available memory.
+    *   **Layer Distribution**: The alternating pattern of RoPE+SWA and NoPE layers is automatically handled by the architecture. The balance provides optimal local and global processing.
+    *   **Context Length**: Take advantage of the architecture's ability to handle long contexts by setting `max_seq_len` to values like 32768 or even higher if your hardware permits.
 
 *   **Tokenizer Choice and Configuration**:
     *   **Domain Alignment**: Train a tokenizer that is appropriate for your target domain(s) and language(s). A well-suited tokenizer can significantly impact performance and convergence.
     *   **Vocabulary Size**: Remember that the `model.vocab_size` parameter in your `train_config.yaml` must exactly match the vocabulary size of your trained tokenizer.
 
 *   **Choosing Model Size (`d_model`, `n_layers`, `n_heads`)**:
-    *   **Resource Balancing**: Select model parameters based on your available compute resources (GPU VRAM, total training time budget). Larger models require more memory and take longer to train.
-    *   **Iterate and Scale**: It's often wise to start with smaller model configurations (e.g., fewer layers/heads, smaller `d_model`) to debug your entire pipeline, ensure data loading is correct, and iterate on hyperparameters quickly. Once you have a stable setup, you can scale up.
+    *   **Memory Considerations**: The hybrid architecture is more memory-efficient for long contexts, but still consider your available compute resources.
+    *   **Iterate and Scale**: Start with smaller model configurations to debug your pipeline, then scale up once you have a stable setup.
 
 *   **Hyperparameter Tuning**:
-    *   **Start with Defaults**: The `train_config.yaml` provides sensible starting points. However, optimal hyperparameters are often dataset-dependent.
-    *   **Key Parameters**: If you're tuning, `learning_rate` is often the most critical. `batch_size` (and `gradient_accumulation_steps`) and `warmup_steps` are also commonly adjusted.
-    *   **Systematic Approach**: Tune one or two hyperparameters at a time to understand their impact.
+    *   **Start with Defaults**: The provided `train_config.yaml` offers sensible starting points optimized for the hybrid architecture.
+    *   **Batch Size Adjustment**: Long-context training may require smaller batch sizes due to memory constraints. Use `gradient_accumulation_steps` to maintain effective batch size.
+    *   **Learning Rate**: The hybrid architecture may benefit from slightly different learning rate schedules. Monitor training carefully and adjust as needed.
 
 *   **Monitoring Training Effectively**:
-    *   **Use W&B**: We strongly recommend enabling Weights & Biases logging (`wandb_project` in `train_config.yaml`). It provides invaluable insights into loss curves, learning rate schedules, gradient norms, hardware utilization, and more, helping you track progress and spot potential issues early.
-    *   **Console Logs**: The `tqdm` progress bar provides immediate console feedback on loss and learning rate.
-    *   **Watch for Issues**: Regularly check for signs of overfitting (training loss decreases but validation/downstream performance stagnates or degrades) or underfitting (training loss remains high).
+    *   **Use W&B**: Essential for tracking the complex dynamics of hybrid attention training.
+    *   **Watch Memory Usage**: Monitor GPU memory usage closely, especially with long contexts.
+    *   **Attention Patterns**: If possible, occasionally visualize attention patterns to ensure both local and global layers are functioning as expected.
 
 *   **Understanding the Learning Rate Schedule**:
-    *   **Warmup Phase**: The initial warmup period (controlled by `warmup_steps`) gradually increases the learning rate. This helps stabilize training in the early stages when weights are changing rapidly.
-    *   **Decay Phase**: After warmup, the learning rate typically decays (cosine decay in this script) over the `max_steps`. This allows for finer adjustments as the model converges.
-    *   **Setting `max_steps`**: Determine `max_steps` based on your dataset size and the number of epochs you want to train for (or total tokens you want the model to see). One epoch means the model has seen the entire dataset once.
+    *   **Extended Warmup**: The hybrid architecture may benefit from longer warmup periods to allow both attention types to stabilize.
+    *   **Gradual Context Scaling**: Consider starting with shorter sequences and gradually increasing context length during training.
 
 *   **Leveraging Gradient Accumulation**:
-    *   **Simulating Larger Batches**: If your per-GPU `batch_size` is limited by VRAM, `gradient_accumulation_steps` allows you to simulate a larger effective batch size (`batch_size * num_gpus * gradient_accumulation_steps`). This can improve training stability and performance.
+    *   **Essential for Long Contexts**: With extended sequences, gradient accumulation becomes crucial for maintaining effective batch sizes.
+    *   **Memory Management**: Use gradient checkpointing aggressively to handle the memory requirements of long sequences.
 
 *   **Regular Checkpointing**:
-    *   **Don't Lose Progress**: For long training runs, frequent checkpointing (via `save_interval`) is crucial. It ensures that you can resume training with minimal loss of work in case of interruptions.
+    *   **Critical for Long Training**: With the computational investment required for long-context training, frequent checkpointing is essential.
 
 *   **Evaluation Strategy**:
-    *   **Beyond Pre-training Loss**: While `train.py` focuses on minimizing the pre-training loss, the ultimate measure of a language model is its performance on downstream tasks.
-    *   **Held-out Sets**: Maintain held-out validation datasets (not seen during training) to periodically evaluate your model's generalization. Consider using academic benchmarks relevant to your goals.
+    *   **Long-Context Benchmarks**: Evaluate on tasks that specifically test long-context understanding to validate the hybrid architecture's benefits.
+    *   **Both Local and Global Tasks**: Test performance on both local coherence tasks and global reasoning tasks to ensure balanced capability.
 
 *   **Start Small, Iterate Fast**:
-    *   **Debug Pipeline First**: Before launching a multi-day or multi-week training run on a massive dataset with a large model, conduct smaller experiments. Use a fraction of your data and a smaller model to verify your data loading, tokenization, training loop, and logging are all working correctly. This can save significant time and resources.
+    *   **Architecture Validation**: Before large-scale training, validate that the hybrid attention is working correctly with smaller experiments.
+    *   **Context Length Scaling**: Start with moderate context lengths and gradually increase to find the optimal balance for your use case.
 
 ---
 
 ## Limitations
 
-While Lunaris Codex is designed to be a robust toolkit for pre-training language models, it's important to understand its current scope and limitations:
+While Lunaris Codex with hybrid attention is designed to be a robust toolkit for pre-training advanced language models, it's important to understand its current scope and limitations:
+
+*   **Experimental Nature**:
+    *   The RNope-SWA hybrid attention architecture is cutting-edge and experimental. While promising, it may require additional tuning and optimization for specific use cases.
+    *   Long-term stability and performance characteristics are still being evaluated across different domains and scales.
 
 *   **Focus on Pre-training**:
     *   Lunaris Codex is primarily engineered for pre-training large language models from scratch. Its core script (`train.py`) and design philosophy are centered around this goal.
-    *   The toolkit does not include built-in scripts or extensive, dedicated support for fine-tuning models on specific downstream tasks (e.g., instruction tuning, sequence classification, question answering). Users wishing to fine-tune the pre-trained models will need to adapt the model code or integrate it with other frameworks (like Hugging Face Transformers).
+    *   The toolkit does not include built-in scripts or extensive, dedicated support for fine-tuning models on specific downstream tasks. Users wishing to fine-tune the pre-trained models will need to adapt the model code or integrate it with other frameworks.
 
 *   **Data Preparation and Tokenization**:
-    *   The crucial steps of data sourcing, cleaning, extensive preprocessing (beyond basic tokenization), and training a tokenizer are external to the `train.py` script.
-    *   Users are responsible for these preliminary stages. The quality, diversity, and appropriateness of the data and tokenizer will significantly influence the final model's performance, and Lunaris Codex relies on the user to manage these aspects effectively.
+    *   The crucial steps of data sourcing, cleaning, extensive preprocessing, and training a tokenizer are external to the `train.py` script.
+    *   Users are responsible for these preliminary stages. The quality, diversity, and appropriateness of the data and tokenizer will significantly influence the final model's performance.
 
 *   **Evaluation Beyond Pre-training Metrics**:
     *   The `train.py` script provides essential training metrics such as loss and perplexity, which are vital for monitoring the pre-training process.
-    *   However, it does not have integrated evaluation pipelines for standard academic NLP benchmarks (e.g., GLUE, SuperGLUE, MMLU) or support for custom downstream task evaluation. Users will need to develop their own evaluation workflows to assess model performance beyond pre-training.
+    *   However, it does not have integrated evaluation pipelines for standard academic NLP benchmarks or long-context specific evaluations. Users will need to develop their own evaluation workflows.
 
 *   **Resource Requirements**:
-    *   Training capable large language models is inherently computationally intensive. While Lunaris Codex is optimized for efficiency, pre-training still demands significant resources, including:
-        *   **High VRAM GPUs**: For larger models and batch sizes.
+    *   Training capable large language models with extended context is inherently computationally intensive. While the hybrid architecture is more efficient than traditional full attention, it still demands significant resources:
+        *   **High VRAM GPUs**: For larger models, longer contexts, and reasonable batch sizes.
         *   **Substantial Storage**: For datasets, tokenizers, and checkpoints.
-        *   **Considerable Training Time**: Potentially days or weeks, depending on the model scale and dataset size.
-    *   Users should be prepared for these hardware and time commitments when undertaking ambitious pre-training projects.
+        *   **Considerable Training Time**: Potentially days or weeks, depending on the model scale and context length.
 
 *   **Advanced Parallelism and Features**:
     *   Currently, Lunaris Codex supports Distributed Data Parallel (DDP) for multi-GPU training.
-    *   More advanced parallelism strategies (e.g., Fully Sharded Data Parallel - FSDP, Tensor Parallelism, Pipeline Parallelism) or features common in some large, established frameworks (like a dedicated model hub or extensive hyperparameter optimization suites) are not yet implemented. These could be areas for future development or community contributions.
+    *   More advanced parallelism strategies (e.g., Fully Sharded Data Parallel - FSDP, Tensor Parallelism, Pipeline Parallelism) are not yet implemented but could be valuable for scaling the hybrid architecture.
 
 ---
 
@@ -302,10 +341,11 @@ This project is licensed under the **MIT License**.
 
 Developed by **Francisco Antonio** ([@MeryylleA](https://github.com/MeryylleA) on GitHub).
 
-Join our community on Discord for discussions, help, and to share your results: [**Moon Cloud Services**](https://discord.gg/JNsfzEwMtC)
+Join our community on Discord for discussions, help, and to share your results with the hybrid attention architecture: [**Moon Cloud Services**](https://discord.gg/JNsfzEwMtC)
 
 ### Special Thanks
 *   To Andrej Karpathy for `nanoGPT`, which served as the inspirational and architectural starting point for this project.
+*   To the authors of "Rope to Nope and Back Again" for the theoretical foundation of the hybrid attention architecture.
 *   To the open-source AI community for their invaluable tools, research, and datasets.
 *   To **Google Gemini** for extensive pair-programming sessions, architectural discussions, debugging, and documentation assistance.
 *   To **Lambda Labs** for supporting this project with the large-scale compute necessary for this research.
