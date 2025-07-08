@@ -4,6 +4,11 @@ Full definition of a LunarisCodex Language Model, all of it in this single file.
 
 FIXED VERSION addressing numerical stability issues for training.
 
+This version has been modified to implement the RNope-SWA hybrid attention
+architecture described in "Rope to Nope and Back Again" (arXiv:2501.18795v1).
+It interleaves RoPE layers with Sliding Window Attention (SWA) and NoPE layers
+with Full Attention.
+
 References:
 
 1) the official GPT-2 TensorFlow implementation released by OpenAI:
@@ -70,7 +75,7 @@ class RMSNorm(nn.Module):
         return output * self.weight
 
 class CausalSelfAttention(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, is_nope_layer: bool = False):
         super().__init__()
         assert config.d_model % config.n_heads == 0
         self.d_model = config.d_model
@@ -86,13 +91,32 @@ class CausalSelfAttention(nn.Module):
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
         self.dropout = config.dropout
+        self.is_nope_layer = is_nope_layer # Store layer type for forward pass logic
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.max_seq_len, config.max_seq_len))
-                                .view(1, 1, config.max_seq_len, config.max_seq_len))
+
+        # Create the appropriate attention mask based on layer type (Full vs. Sliding Window).
+        # This mask is used by both flash and non-flash attention implementations.
+        # It has a value of 1 (or True) for allowed positions and 0 (or False) for masked-out positions.
+        mask = torch.ones(config.max_seq_len, config.max_seq_len, dtype=torch.bool)
+        if self.is_nope_layer:
+            # Full causal attention for NoPE layers: standard lower-triangular mask.
+            mask = torch.tril(mask)
+        else:
+            # Sliding Window Attention for RoPE layers.
+            # Each token can attend to itself and the previous `sliding_window_size - 1` tokens.
+            q_pos = torch.arange(config.max_seq_len).view(-1, 1)
+            k_pos = torch.arange(config.max_seq_len).view(1, -1)
+            relative_pos = k_pos - q_pos
+            # Allow positions where key is not in the future (causal) and is within the sliding window.
+            in_window = relative_pos > -(config.sliding_window_size)
+            causal = relative_pos <= 0
+            mask = torch.logical_and(in_window, causal)
+
+        self.register_buffer("bias", mask.view(1, 1, config.max_seq_len, config.max_seq_len))
+
 
     def forward(self, x, freqs_cis):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (d_model)
@@ -101,8 +125,11 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2) # (B, nh, T, hs)
         k = k.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2) # (B, n_kv_h, T, hs)
         v = v.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2) # (B, n_kv_h, T, hs)
-        # apply rotary embeddings
-        q, k = apply_rotary_emb(q, k, freqs_cis)
+
+        # Conditionally apply rotary embeddings only for RoPE layers (not NoPE layers).
+        if not self.is_nope_layer:
+            q, k = apply_rotary_emb(q, k, freqs_cis)
+
         # for GQA, repeat k and v heads to match q heads
         if self.n_kv_heads < self.n_heads:
             num_repeats = self.n_heads // self.n_kv_heads
@@ -111,7 +138,15 @@ class CausalSelfAttention(nn.Module):
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            if self.is_nope_layer:
+                # Use the more optimized built-in causal masking for NoPE layers (full attention)
+                y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            else:
+                # For RoPE+SWA layers, we must provide an explicit mask and set is_causal=False.
+                # The mask should be `True` for positions that should be masked.
+                # Our self.bias has 1s for allowed positions, so we use `== 0`.
+                attn_mask = self.bias[:,:,:T,:T] == 0
+                y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.dropout if self.training else 0, is_causal=False)
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -144,16 +179,21 @@ class SwiGLU(nn.Module):
         return x
 
 class Block(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, layer_idx: int):
         super().__init__()
+        # Determine if this is a NoPE layer based on the 1:3 interleaving ratio.
+        # For every 4 layers, the last one is a NoPE layer (e.g., layers 3, 7, 11...).
+        is_nope_layer = (layer_idx + 1) % 4 == 0
+
         self.ln_1 = RMSNorm(config.d_model)
-        self.attn = CausalSelfAttention(config)
+        self.attn = CausalSelfAttention(config, is_nope_layer=is_nope_layer)
         self.ln_2 = RMSNorm(config.d_model)
         self.mlp = SwiGLU(config)
         self.use_gradient_checkpointing = config.use_gradient_checkpointing
 
     def _block_forward(self, x, freqs_cis):
         """Helper function for the forward pass, used by checkpointing."""
+        # RoPE is now applied conditionally inside self.attn
         x = x + self.attn(self.ln_1(x), freqs_cis)
         x = x + self.mlp(self.ln_2(x))
         return x
@@ -176,6 +216,7 @@ class LunarisCodexConfig:
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     rope_theta: float = 10000.0
     use_gradient_checkpointing: bool = False # Whether to use gradient checkpointing to save memory
+    sliding_window_size: int = 4096 # For RoPE+SWA layers
 
 class LunarisCodex(nn.Module):
     def __init__(self, config):
@@ -187,7 +228,8 @@ class LunarisCodex(nn.Module):
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.d_model),
             drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layers)]),
+            # Pass the layer index to each Block to implement the interleaved RNope-SWA architecture
+            h = nn.ModuleList([Block(config, layer_idx=i) for i in range(config.n_layers)]),
             ln_f = RMSNorm(config.d_model),
         ))
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
@@ -296,10 +338,20 @@ class LunarisCodex(nn.Module):
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
-        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
-        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        # Separating params for weight decay. Embeddings are explicitly excluded.
+        decay_params = []
+        nodecay_params = []
+        for pn, p in param_dict.items():
+            # Check for parameters with 2 or more dimensions
+            if p.dim() >= 2:
+                # Explicit exception for the embedding weights
+                if 'transformer.wte.weight' in pn:
+                    nodecay_params.append(p)
+                else:
+                    decay_params.append(p)
+            else:
+                # 1D parameters (biases, norm weights) go to the no-decay group
+                nodecay_params.append(p)
         optim_groups = [
             {'params': decay_params, 'weight_decay': weight_decay},
             {'params': nodecay_params, 'weight_decay': 0.0}
