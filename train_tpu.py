@@ -20,6 +20,7 @@ from tqdm import tqdm
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.distributed.parallel_loader as pl
+import torch_xla.runtime as xr
 
 # Assuming model.py contains the LunarisCodex and LunarisCodexConfig classes
 from model import LunarisCodex, LunarisCodexConfig
@@ -182,10 +183,10 @@ def _mp_fn(index, config: TrainConfig):
     The 'index' argument is provided by xmp.spawn and is required, but often unused.
     """
     # XLA: Obtain rank, world size, and the XLA device for this process.
-    rank = xm.get_ordinal()
-    world_size = xm.xla_world_size()
+    rank = xr.global_ordinal()
+    world_size = xr.world_size()
     device = xm.xla_device()
-    is_master_process = xm.is_master_process()
+    is_master_process = (rank == 0)
     
     torch.manual_seed(1337 + rank)
     
