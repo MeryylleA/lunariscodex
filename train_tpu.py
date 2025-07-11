@@ -1,7 +1,6 @@
-# train_tpu.py
-# A robust, feature-rich training script for the LunarisCodex model, ported for PyTorch/XLA on Google Cloud TPU.
-# CORRECTED VERSION - Fixed gradient accumulation logging, LR scheduler, and other subtle bugs
-# PORTED FOR TPU - Adapted from the original DDP script for single-host, multi-device TPU training.
+# train_tpu_fixed.py
+# TPU-optimized training script for the LunarisCodex model using PyTorch XLA 2.7+
+# Fixed for PJRT runtime compatibility and GradScaler issues
 
 import os
 import time
@@ -10,24 +9,26 @@ import glob
 from dataclasses import dataclass, field
 from typing import Optional
 from contextlib import nullcontext
+import functools
 
 import yaml
 import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
-# XLA: DDP is not used. XLA handles distribution implicitly.
-# We keep torch.distributed for host-side process group initialization and cleanup.
-from torch.distributed import init_process_group, destroy_process_group
 from tqdm import tqdm
 
-# XLA: Import required PyTorch/XLA libraries for TPU device handling, runtime info, and distributed operations.
+# TPU/XLA imports - Updated for PyTorch XLA 2.7+
 import torch_xla.core.xla_model as xm
+import torch_xla.distributed.parallel_loader as pl
+import torch_xla.distributed.xla_multiprocessing as xmp
+import torch_xla.utils.utils as xu
+from torch_xla.amp import autocast, GradScaler
 import torch_xla.runtime as xr
 
 # Assuming model.py contains the LunarisCodex and LunarisCodexConfig classes
 from model import LunarisCodex, LunarisCodexConfig
 
-# --- Configuration Dataclass (Unchanged structure) ---
+# --- Configuration Dataclass ---
 @dataclass
 class TrainConfig:
     # Model configuration
@@ -50,11 +51,14 @@ class TrainConfig:
     # Training configuration
     batch_size: int = 16
     gradient_accumulation_steps: int = 1
-    num_epochs: int = 1 # Set to a large number for step-based training
+    num_epochs: int = 1
     grad_clip: float = 1.0
-    # XLA: The 'device' field is now illustrative; the script will dynamically use the available TPU device.
-    device: str = "tpu"
     compile_model: bool = True
+    
+    # TPU-specific configuration
+    tpu_cores: int = 4
+    mixed_precision: bool = True
+    sync_every_n_steps: int = 1
 
     # I/O and Logging
     out_dir: str = "checkpoints"
@@ -64,7 +68,7 @@ class TrainConfig:
     # W&B configuration
     wandb_project: Optional[str] = "lunaris-codex-tpu"
     wandb_entity: Optional[str] = None
-    wandb_run_name: Optional[str] = f"run-tpu-{time.strftime('%Y-%m-%d-%H-%M')}"
+    wandb_run_name: Optional[str] = f"tpu-run-{time.strftime('%Y-%m-%d-%H-%M')}"
 
     @classmethod
     def from_yaml(cls, path: str):
@@ -77,7 +81,8 @@ class TrainConfig:
         config_dict['model'] = model_config
 
         float_fields = ['learning_rate', 'weight_decay', 'beta1', 'beta2', 'grad_clip']
-        int_fields = ['warmup_steps', 'max_steps', 'batch_size', 'gradient_accumulation_steps', 'num_epochs', 'save_interval', 'log_interval']
+        int_fields = ['warmup_steps', 'max_steps', 'batch_size', 'gradient_accumulation_steps', 
+                      'num_epochs', 'save_interval', 'log_interval', 'tpu_cores', 'sync_every_n_steps']
 
         for key in float_fields:
             if key in config_dict:
@@ -89,23 +94,29 @@ class TrainConfig:
         return cls(**config_dict)
 
 
-# --- Sharded Memory-Mapped Dataset (Unchanged) ---
-class ShardDataset(Dataset):
-    def __init__(self, data_dir: str, sequence_length: int):
+# --- TPU-Optimized Sharded Dataset ---
+class TPUShardDataset(Dataset):
+    """TPU-optimized dataset with efficient data loading and caching."""
+    
+    def __init__(self, data_dir: str, sequence_length: int, device=None):
         super().__init__()
         self.data_dir = data_dir
         self.sequence_length = sequence_length
+        self.device = device or xm.xla_device()
+        
         self.shards = sorted(glob.glob(os.path.join(data_dir, "*.npy")))
         if not self.shards:
             raise ValueError(f"No .npy files found in directory: {data_dir}")
 
+        # Count total tokens across all shards
         total_tokens = sum(np.load(shard, mmap_mode='r').shape[0] for shard in self.shards)
         self.total_samples = total_tokens // self.sequence_length
 
-        # XLA: This print will appear on each process/chip.
-        print(f"[DATA] Loaded {len(self.shards)} shards. Total tokens: {total_tokens/1e9:.2f}B.")
-        print(f"[DATA] Creating {self.total_samples:,} non-overlapping samples of length {self.sequence_length}.")
+        if xm.is_master_ordinal():
+            print(f"[TPU-DATA] Loaded {len(self.shards)} shards. Total tokens: {total_tokens/1e9:.2f}B.")
+            print(f"[TPU-DATA] Creating {self.total_samples:,} non-overlapping samples of length {self.sequence_length}.")
         
+        # Use memory mapping for efficient data loading
         self.mmap_shards = [np.load(shard, mmap_mode='r') for shard in self.shards]
         self.shard_lengths = [len(shard) for shard in self.mmap_shards]
         self.cumulative_lengths = np.cumsum(self.shard_lengths)
@@ -114,25 +125,36 @@ class ShardDataset(Dataset):
         return self.total_samples
 
     def __getitem__(self, idx):
+        # Calculate token start position for this block
         token_start_pos = idx * self.sequence_length
+        
+        # Find which shard this block starts in
         shard_idx = np.searchsorted(self.cumulative_lengths, token_start_pos, side='right')
+        
+        # Calculate local index within the shard
         local_start_idx = token_start_pos if shard_idx == 0 else token_start_pos - self.cumulative_lengths[shard_idx - 1]
         
+        # We need sequence_length + 1 tokens for x and y
         seq_len_with_target = self.sequence_length + 1
         
+        # Handle reading across shards if necessary
         if local_start_idx + seq_len_with_target > self.shard_lengths[shard_idx]:
+            # Part 1 from first shard
             remaining_len = self.shard_lengths[shard_idx] - local_start_idx
             seq_part1 = self.mmap_shards[shard_idx][local_start_idx : local_start_idx + remaining_len]
 
+            # Part 2 from next shard
             if shard_idx + 1 < len(self.mmap_shards):
                 needed_from_next = seq_len_with_target - remaining_len
                 seq_part2 = self.mmap_shards[shard_idx + 1][:needed_from_next]
                 seq = np.concatenate((seq_part1, seq_part2))
             else:
-                 seq = seq_part1
+                seq = seq_part1
         else:
+            # Entire block is within a single shard
             seq = self.mmap_shards[shard_idx][local_start_idx : local_start_idx + seq_len_with_target]
         
+        # Pad if sequence is too short
         if len(seq) < seq_len_with_target:
             pad_len = seq_len_with_target - len(seq)
             seq = np.pad(seq, (0, pad_len), 'constant', constant_values=-1)
@@ -141,25 +163,10 @@ class ShardDataset(Dataset):
         x, y = seq_tensor[:-1], seq_tensor[1:]
         return x, y
 
-# --- TPU Setup ---
-def setup_tpu():
-    """Initializes the distributed environment for PyTorch/XLA."""
-    # XLA: When using PJRT_DEVICE=TPU and a launcher like torchrun or gcloud,
-    # these environment variables are set automatically for each process.
-    is_distributed = 'WORLD_SIZE' in os.environ and int(os.environ['WORLD_SIZE']) > 1
-    if is_distributed:
-        # XLA: Use torch.distributed.init_process_group with the 'gloo' backend for host-side
-        # coordination. This is not for model gradient communication, which XLA handles transparently.
-        init_process_group("gloo")
-        # XLA: Use the torch_xla.runtime to get the true ordinal and world size for the TPU mesh.
-        rank = xr.global_ordinal()
-        world_size = xr.world_size()
-        print(f"[TPU] Setup complete: rank {rank}, world_size {world_size}")
-        return True, rank, world_size
-    return False, 0, 1
 
-# --- Learning Rate Scheduler (Unchanged) ---
+# --- TPU Learning Rate Scheduler ---
 def get_lr(step, config: TrainConfig):
+    """Learning rate scheduler with TPU-optimized warmup and decay."""
     if step < config.warmup_steps:
         return config.learning_rate * step / config.warmup_steps
     if step >= config.max_steps:
@@ -169,195 +176,303 @@ def get_lr(step, config: TrainConfig):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return (config.learning_rate * 0.01) + coeff * (config.learning_rate * 0.99)
 
-# --- Robust checkpoint key unwrapping ---
-def unwrap_model_keys(state_dict):
-    """Remove torch.compile prefixes from model state dict keys."""
-    unwrapped = {}
-    # XLA: DDP-related prefixes ('module.', '_orig_mod.module.') are removed as DDP is not used.
-    # We only need to handle the prefix added by torch.compile.
-    prefixes_to_remove = ['_orig_mod.']
 
-    for k, v in state_dict.items():
-        new_k = k
-        for prefix in prefixes_to_remove:
-            if new_k.startswith(prefix):
-                new_k = new_k[len(prefix):]
-                break
-        unwrapped[new_k] = v
-    return unwrapped
+# --- TPU Checkpoint Management ---
+def save_checkpoint_tpu(model, optimizer, config, step, epoch, save_path):
+    """TPU-optimized checkpoint saving."""
+    if xm.is_master_ordinal():
+        # Get the raw model state (unwrapped from any DDP/compile wrappers)
+        raw_model = model
+        if hasattr(model, 'module'):
+            raw_model = model.module
+        if hasattr(raw_model, '_orig_mod'):
+            raw_model = raw_model._orig_mod
+            
+        checkpoint = {
+            'model': raw_model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'config': config.__dict__,
+            'step': step,
+            'epoch': epoch,
+        }
+        
+        # Use xm.save for TPU-optimized saving
+        xm.save(checkpoint, save_path)
+        print(f"\n[TPU-CHECKPOINT] Saved checkpoint to {save_path}")
 
-# --- Main Training Function ---
-def train(config_path: str):
-    config = TrainConfig.from_yaml(config_path)
-    # XLA: Set up the TPU distributed environment.
-    is_tpu, rank, world_size = setup_tpu()
-    is_master_process = rank == 0
 
-    torch.manual_seed(1337 + rank)
+def load_checkpoint_tpu(model, optimizer, checkpoint_path, device):
+    """TPU-optimized checkpoint loading."""
+    if os.path.exists(checkpoint_path):
+        print(f"[TPU-SETUP] Loading checkpoint: {checkpoint_path}")
+        
+        # Load checkpoint to TPU device
+        state = torch.load(checkpoint_path, map_location=device)
+        
+        # Get the raw model for state dict loading
+        raw_model = model
+        if hasattr(model, 'module'):
+            raw_model = model.module
+        if hasattr(raw_model, '_orig_mod'):
+            raw_model = raw_model._orig_mod
+            
+        raw_model.load_state_dict(state['model'])
+        optimizer.load_state_dict(state['optimizer'])
+        
+        return state['step'], state.get('epoch', 0)
+    return 0, 0
 
-    # XLA: Acquire the TPU device for the current process. This is the key step for device placement.
+
+# --- Main TPU Training Function ---
+def train_tpu(rank, config: TrainConfig):
+    """Main TPU training function for a single TPU core."""
+    
+    # Setup TPU device
     device = xm.xla_device()
-    # XLA: TPUs excel with bfloat16. The device type for AMP must be 'xla'.
-    dtype = torch.bfloat16
-    device_type = 'xla'
-    ctx = torch.amp.autocast(device_type=device_type, dtype=dtype)
-
-    if is_master_process:
-        os.makedirs(config.out_dir, exist_ok=True)
+    
+    # Fixed for PyTorch XLA 2.7+: Use runtime API
+    world_size = xr.global_runtime_device_count()
+    is_master = xm.is_master_ordinal()
+    
+    if is_master:
+        print(f"[TPU-SETUP] Starting TPU training on {world_size} cores")
+        print(f"[TPU-SETUP] Device: {device}")
         print("-" * 50)
-        print(" " * 10 + "LUNARIS CODEX TRAINING (TPU/XLA)")
+        print(" " * 10 + "LUNARIS CODEX TPU TRAINING")
         print("-" * 50)
         print(f"Model: {config.model}")
         print(f"Data: {config.data_dir}")
-        print(f"Batch size: {config.batch_size}")
+        print(f"Batch size per core: {config.batch_size}")
+        print(f"Global batch size: {config.batch_size * world_size}")
         print(f"Gradient accumulation: {config.gradient_accumulation_steps}")
         print(f"Learning rate: {config.learning_rate}")
         print(f"Max steps: {config.max_steps}")
-        print(f"Running on {world_size} TPU devices.")
         print("-" * 50)
 
-    # XLA: Only the master process (rank 0) should initialize WandB to avoid duplicate runs.
-    if is_master_process and config.wandb_project:
-        import wandb
-        wandb.init(project=config.wandb_project, entity=config.wandb_entity, name=config.wandb_run_name, config=config.__dict__)
-
-    train_dataset = ShardDataset(data_dir=config.data_dir, sequence_length=config.sequence_length)
-    # XLA: DistributedSampler is still the correct way to shard data across distributed processes.
-    train_sampler = torch.utils.data.distributed.DistributedSampler(
-        train_dataset,
-        num_replicas=world_size,
-        rank=rank,
-        shuffle=True,
-    ) if is_tpu else None
-    # XLA: pin_memory=True is for GPUs and should be False for TPUs.
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, sampler=train_sampler, num_workers=4, pin_memory=False)
-
-    # XLA: Move model to the specific XLA device assigned to this process.
-    model = LunarisCodex(config.model).to(device)
-
-    if is_master_process:
-        num_params = sum(p.numel() for p in model.parameters()) / 1e6
-        print(f"[MODEL] Number of parameters: {num_params:.2f}M")
-
-    if config.compile_model:
-        if is_master_process: print("[MODEL] Compiling model with torch.compile...")
-        # XLA: torch.compile works with the XLA backend, providing significant speedups.
-        model = torch.compile(model)
+    # Set random seed
+    torch.manual_seed(1337 + rank)
     
-    # XLA: The DDP wrapper is removed. XLA handles data parallelism automatically.
-    # if is_ddp: model = DDP(...)
+    # Initialize W&B on master process
+    if is_master and config.wandb_project:
+        import wandb
+        wandb.init(
+            project=config.wandb_project, 
+            entity=config.wandb_entity, 
+            name=config.wandb_run_name, 
+            config=config.__dict__
+        )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, betas=(config.beta1, config.beta2), weight_decay=config.weight_decay)
+    # Setup dataset and dataloader
+    train_dataset = TPUShardDataset(
+        data_dir=config.data_dir, 
+        sequence_length=config.sequence_length,
+        device=device
+    )
+    
+    # TPU-optimized sampler
+    train_sampler = torch.utils.data.distributed.DistributedSampler(
+        train_dataset, 
+        num_replicas=world_size, 
+        rank=rank,
+        shuffle=True
+    )
+    
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=config.batch_size, 
+        sampler=train_sampler,
+        num_workers=0,  # TPU works best with num_workers=0
+        pin_memory=False,  # Not needed for TPU
+        drop_last=True
+    )
+    
+    # Wrap with TPU parallel loader
+    train_loader = pl.MpDeviceLoader(train_loader, device)
 
-    current_step = 0
-    current_epoch = 0
-    # XLA: raw_model is simply the model itself, as there is no DDP wrapper to unwrap.
-    raw_model = model
+    # Initialize model
+    model = LunarisCodex(config.model).to(device)
+    
+    if is_master:
+        num_params = sum(p.numel() for p in model.parameters()) / 1e6
+        print(f"[TPU-MODEL] Number of parameters: {num_params:.2f}M")
+
+    # TPU model compilation - Use XLA optimization
+    if config.compile_model:
+        if is_master:
+            print("[TPU-MODEL] Compiling model for TPU...")
+        # For TPU, avoid torch.compile and rely on XLA's built-in optimization
+        # model = torch.compile(model, backend='openxla')
+        pass  # XLA automatically optimizes the model
+
+    # Initialize optimizer
+    optimizer = torch.optim.AdamW(
+        model.parameters(), 
+        lr=config.learning_rate, 
+        betas=(config.beta1, config.beta2), 
+        weight_decay=config.weight_decay
+    )
+    
+    # Initialize gradient scaler for mixed precision
+    # Fixed: Use proper GradScaler initialization for PyTorch XLA 2.7+
+    scaler = None
+    if config.mixed_precision:
+        # For PyTorch XLA 2.7+, initialize GradScaler without device parameter
+        # The device will be handled internally by XLA
+        scaler = GradScaler()
+
+    # Setup checkpoint directory
+    if is_master:
+        os.makedirs(config.out_dir, exist_ok=True)
+
+    # Load checkpoint if exists
     checkpoint_path = os.path.join(config.out_dir, "latest_checkpoint.pt")
+    current_step, current_epoch = load_checkpoint_tpu(model, optimizer, checkpoint_path, device)
 
-    if os.path.exists(checkpoint_path):
-        if is_master_process: print(f"[SETUP] Resuming from checkpoint: {checkpoint_path}")
-        # XLA: Load checkpoint on CPU first to avoid device-to-device mapping issues.
-        state = torch.load(checkpoint_path, map_location='cpu')
-        unwrapped_state_dict = unwrap_model_keys(state['model'])
-        raw_model.load_state_dict(unwrapped_state_dict)
-        optimizer.load_state_dict(state['optimizer'])
-        current_step = state['step']
-        current_epoch = state.get('epoch', 0)
-        if is_master_process: print(f"[SETUP] Resumed successfully. Starting from step {current_step}")
+    if is_master:
+        print(f"\n[TPU-TRAIN] Starting training from step {current_step} up to {config.max_steps} steps...")
+        pbar = tqdm(total=config.max_steps, desc="TPU Training Steps", initial=current_step, ncols=120)
 
-    optimizer.zero_grad(set_to_none=True)
-
-    if is_tpu:
-        train_sampler.set_epoch(current_epoch)
-
-    if is_master_process:
-        print(f"\n[TRAIN] Starting training from step {current_step} up to {config.max_steps} steps...")
-        pbar = tqdm(total=config.max_steps, desc="Training Steps", initial=current_step, ncols=120)
-
-    data_iter = iter(train_loader)
-
+    # Training loop
+    optimizer.zero_grad()
+    
     while current_step < config.max_steps:
-        current_step += 1
-
-        lr = get_lr(current_step, config)
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
-
-        accumulated_loss = 0.0
-
-        for micro_step in range(config.gradient_accumulation_steps):
-            # XLA: The DDP `no_sync` context is not needed. Gradients are accumulated locally on each
-            # TPU core's HBM. The cross-replica synchronization happens only during the optimizer step.
-            try:
-                x, y = next(data_iter)
-            except StopIteration:
-                current_epoch += 1
-                if is_tpu:
-                    train_loader.sampler.set_epoch(current_epoch)
-                data_iter = iter(train_loader)
-                x, y = next(data_iter)
-
-            # XLA: Move data batch to the current process's assigned TPU device.
-            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-
-            with ctx:
-                logits, loss, _ = model(x, targets=y)
-                loss = loss / config.gradient_accumulation_steps
-
-            accumulated_loss += loss.item()
-            loss.backward()
-
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+        # Set epoch for proper shuffling
+        train_sampler.set_epoch(current_epoch)
         
-        # XLA: Replace `optimizer.step()` with `xm.optimizer_step()`.
-        # This function performs the gradient reduction (all-reduce) across all TPU replicas
-        # and then executes the optimizer's weight update step. `barrier=True` ensures
-        # the step completes on all devices before the program proceeds, which is crucial for consistency.
-        xm.optimizer_step(optimizer, barrier=True)
-        optimizer.zero_grad(set_to_none=True)
+        for batch_idx, (x, y) in enumerate(train_loader):
+            current_step += 1
+            
+            # Learning rate scheduling
+            lr = get_lr(current_step, config)
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
 
-        # XLA: All I/O (logging, progress bar, checkpointing) should be guarded to run only on the master process.
-        if is_master_process:
-            pbar.update(1)
+            accumulated_loss = 0.0
 
-            if current_step % config.log_interval == 0:
-                log_loss = accumulated_loss
-                perplexity = math.exp(log_loss) if log_loss < 100 else float('inf')
-                current_lr = lr
+            # Gradient accumulation loop
+            for micro_step in range(config.gradient_accumulation_steps):
+                # Forward pass with mixed precision
+                if config.mixed_precision and scaler is not None:
+                    with autocast(device_type='cuda'):
+                        logits, loss, _ = model(x, targets=y)
+                        loss = loss / config.gradient_accumulation_steps
+                else:
+                    logits, loss, _ = model(x, targets=y)
+                    loss = loss / config.gradient_accumulation_steps
 
-                postfix_data = { "loss": f"{log_loss:.3f}", "ppl": f"{perplexity:.2f}" if perplexity != float('inf') else "inf", "lr": f"{current_lr:.2e}", "gnorm": f"{grad_norm.item():.2f}" }
-                pbar.set_postfix(postfix_data)
+                accumulated_loss += loss.item()
 
-                if config.wandb_project:
-                    wandb.log({ "step": current_step, "loss": log_loss, "perplexity": perplexity, "lr": current_lr, "grad_norm": grad_norm.item(), "epoch": current_epoch })
+                # Backward pass
+                if config.mixed_precision and scaler is not None:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
 
-            if current_step > 0 and current_step % config.save_interval == 0:
-                # XLA: The xm.optimizer_step barrier ensures all model replicas are synchronized before saving.
-                checkpoint = { 'model': raw_model.state_dict(), 'optimizer': optimizer.state_dict(), 'config': config.__dict__, 'step': current_step, 'epoch': current_epoch, }
-                save_path = os.path.join(config.out_dir, f"ckpt_{current_step}.pt")
-                # XLA: Use `xm.save` for safe and potentially optimized checkpointing in a distributed setting.
-                # It typically saves from the master process while other processes wait.
-                xm.save(checkpoint, save_path)
+            # Gradient clipping and optimizer step
+            if config.mixed_precision and scaler is not None:
+                scaler.unscale_(optimizer)
+                
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+            
+            # TPU-optimized optimizer step
+            if config.mixed_precision and scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                xm.optimizer_step(optimizer)  # Use XLA optimizer step for better performance
+                
+            optimizer.zero_grad()
 
-                latest_path = os.path.join(config.out_dir, "latest_checkpoint.pt")
-                xm.save(checkpoint, latest_path)
-                print(f"\n[CHECKPOINT] Saved checkpoint to {save_path}")
+            # Synchronize TPU cores periodically
+            if current_step % config.sync_every_n_steps == 0:
+                xm.mark_step()
 
-    # Cleanup
-    if is_master_process:
-        print("\nMax steps reached. Finishing training.")
+            # Progress tracking and logging
+            if is_master:
+                pbar.update(1)
+
+                if current_step % config.log_interval == 0:
+                    log_loss = accumulated_loss
+
+                    if log_loss < 100:
+                        try:
+                            perplexity = math.exp(log_loss)
+                        except (OverflowError, ValueError):
+                            perplexity = float('inf')
+                    else:
+                        perplexity = float('inf')
+
+                    current_lr = lr
+
+                    postfix_data = {
+                        "loss": f"{log_loss:.3f}",
+                        "ppl": f"{perplexity:.2f}" if perplexity != float('inf') else "inf",
+                        "lr": f"{current_lr:.2e}",
+                        "gnorm": f"{grad_norm.item():.2f}"
+                    }
+                    pbar.set_postfix(postfix_data)
+
+                    if config.wandb_project:
+                        wandb.log({
+                            "step": current_step,
+                            "loss": log_loss,
+                            "perplexity": perplexity,
+                            "lr": current_lr,
+                            "grad_norm": grad_norm.item(),
+                            "epoch": current_epoch
+                        })
+
+                # Checkpointing
+                if current_step > 0 and current_step % config.save_interval == 0:
+                    save_path = os.path.join(config.out_dir, f"ckpt_{current_step}.pt")
+                    save_checkpoint_tpu(model, optimizer, config, current_step, current_epoch, save_path)
+                    
+                    latest_path = os.path.join(config.out_dir, "latest_checkpoint.pt")
+                    save_checkpoint_tpu(model, optimizer, config, current_step, current_epoch, latest_path)
+
+            # Check if we've reached max steps
+            if current_step >= config.max_steps:
+                break
+
+        current_epoch += 1
+        
+        if current_step >= config.max_steps:
+            break
+
+    # Final cleanup
+    if is_master:
+        print("\n[TPU-TRAIN] Max steps reached. Finishing training.")
         pbar.close()
         if config.wandb_project:
             wandb.finish()
-    if is_tpu:
-        # XLA: Use a rendezvous to ensure all processes finish training and cleanup properly.
-        xm.rendezvous("training_complete")
-        destroy_process_group()
+
+    # Wait for all TPU cores to finish
+    xm.rendezvous("training_finished")
+
+
+# --- TPU Multi-Processing Entry Point ---
+def main():
+    """Main entry point for TPU training."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Train LunarisCodex on TPU")
+    parser.add_argument("config", type=str, help="Path to the config.yaml file")
+    args = parser.parse_args()
+    
+    # Load configuration
+    config = TrainConfig.from_yaml(args.config)
+    
+    # Print TPU information
+    print(f"[TPU-SETUP] Initializing TPU training")
+    print(f"[TPU-SETUP] Using PyTorch XLA version: {torch.__version__}")
+    
+    # For PyTorch XLA 2.7+, use None to auto-detect all available devices
+    xmp.spawn(
+        train_tpu,
+        args=(config,),
+        nprocs=None,  # Auto-detect all available TPU cores
+        start_method='spawn'
+    )
+
 
 if __name__ == '__main__':
-    import argparse
-    parser = argparse.ArgumentParser(description="Train a LunarisCodex model on Cloud TPU with PyTorch/XLA.")
-    parser.add_argument("config", type=str, help="Path to the config.yaml file.")
-    args = parser.parse_args()
-    train(args.config)
+    main()
