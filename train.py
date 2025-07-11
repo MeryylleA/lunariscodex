@@ -305,7 +305,7 @@ def train(config_path: str):
 
                 # Forward pass
                 with ctx:
-                    logits, loss = model(x, y)
+                    logits, loss, _ = model(x, targets=y)
                     loss = loss / config.gradient_accumulation_steps
 
                 accumulated_loss += loss.item()
