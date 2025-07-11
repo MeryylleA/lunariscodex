@@ -1,6 +1,6 @@
 # Lunaris Codex
 
-> **Note:** You are viewing an experimental branch of Lunaris Codex. This version includes state-of-the-art architectural features for enhanced performance and training efficiency. These features are currently under evaluation.
+> **Note:** You are viewing the `dev/unified-architecture` branch of Lunaris Codex. This version represents our most advanced and robust architecture, synthesizing multiple state-of-the-art techniques for optimal training stability and performance.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/discord/1138864753915854898?label=Discord&logo=discord&color=7289DA)](https://discord.gg/JNsfzEwMtC)
@@ -17,19 +17,36 @@ This new version marks a significant evolution of the project, moving to an arch
 
 ---
 
-## Architecture Overview
+### **Architecture Overview: A Synthesis of Best Practices**
 
-Lunaris Codex is engineered for a balance of performance and clarity. Its architecture integrates several state-of-the-art features to ensure top-tier performance and training efficiency.
+The `unified-architecture` of Lunaris Codex is a state-of-the-art, Llama-style decoder-only Transformer. It is not a single new invention, but a meticulous synthesis of proven techniques from leading models, engineered for maximum stability, efficiency, and performance.
 
-| Component | Implementation | Benefits & Considerations |
+#### **Core Components (The Llama-style Foundation)**
+| Component | Implementation | Benefits |
 | :--- | :--- | :--- |
-| **Normalization** | **RMSNorm with Learnable Bias** | **Benefits:** More expressive than standard RMSNorm. The learnable bias allows the model to learn an optimal activation mean, enhancing stability by preventing mean-shift in deep networks. |
-| **Positional Info**| **RoPE (Rotary Positional Embeddings)** | **Benefits:** Injects relative positional information, leading to excellent generalization across various sequence lengths. Achieved without any learned parameters, making it efficient. |
-| **Attention** | **Grouped Query Attention (GQA)** | **Benefits:** Drastically reduces the memory usage of the KV cache during inference by sharing Key/Value heads across groups of Query heads. This enables faster generation and larger context windows. |
-| **FFN Activation**| **SwiGLU with Fused Projection** | **Benefits:** Offers improved performance over traditional activations. The gate and up-projections are fused into a single linear layer, improving GPU performance by reducing kernel overhead. |
-| **Training** | **Gradient Checkpointing** | **Benefits:** Massively reduces VRAM usage during training by recomputing activations during the backward pass instead of storing them. This allows for training larger models or using larger batch sizes, at the cost of a small compute overhead. |
-| **Structure** | **Pre-LayerNorm Decoder-Only Transformer** | **Benefits:** A standard, proven architecture for autoregressive language modeling. Pre-LayerNorm (applying normalization before attention/FFN) enhances training stability, especially for deep networks. |
-| **Embeddings** | **Tied Input/Output Token Embeddings** | **Benefits:** Significantly reduces the model's parameter count by sharing weights between the token embedding layer and the final output layer. Can also improve model quality and training efficiency. |
+| **Normalization** | **RMSNorm** | A simple, efficient normalization layer that improves training stability. |
+| **Activation** | **SwiGLU** | A high-performance activation function that offers better expressivity than standard ReLU/GELU. |
+| **Attention** | **Grouped-Query Attention (GQA)** | Reduces inference memory usage and speeds up generation by sharing Key/Value heads. |
+| **Structure** | **Pre-Normalization** | Enhances gradient flow and training stability, critical for deep networks. |
+| **Embeddings** | **Tied Input/Output Embeddings** | Significantly reduces parameter count and acts as a useful regularizer. |
+
+#### **Advanced Mechanisms for Enhanced Performance**
+
+**1. Efficient Inference with KV Caching**
+*   The model has a built-in Key-Value cache mechanism. During autoregressive generation, the keys and values from past tokens are cached and reused.
+*   This makes generation orders of magnitude faster. Instead of recomputing the full context for each new token (an O(n²) process), the complexity for generating the next token is reduced to O(1) with respect to sequence length, as it only requires a single forward pass over the new token.
+
+**2. Stable Hyperparameter Transfer with μ-Parametrization (μP)**
+*   μ-Parametrization (μP) is a technique that allows hyperparameters (like learning rate) tuned on smaller models to be transferred effectively to larger-scale models without extensive re-tuning.
+*   Our implementation focuses on the most critical aspects of μP for stable training: the final output layer (`lm_head`) is initialized with near-zero variance, and a significantly scaled-down learning rate is applied only to this layer. This simple change dramatically improves training stability as model width (`d_model`) increases.
+
+**3. Dynamic Computation with LayerSkip (Gated Residuals)**
+*   Each residual connection in the Transformer blocks is "gated" by a small, learnable, token-wise network.
+*   This allows the model to dynamically learn to scale down or entirely "skip" the computation of a sub-layer (Attention or FFN) for tokens where that computation is not beneficial. This acts as an intelligent, learned form of regularization and improves the model's computational allocation, letting "easier" tokens bypass complex processing.
+
+**4. Flexible Attention with Split-Head RoPE**
+*   This novel mechanism enhances the flexibility of each attention head. The feature dimension of each query and key head is split into two parts: a "positional" part and a "content" part.
+*   Rotary Positional Embeddings (RoPE) are applied *only* to the positional part, while the content part remains position-agnostic. This gives each head the ability to focus simultaneously on local, position-sensitive patterns and global, position-agnostic semantic relationships, making the model's attention mechanism more powerful and versatile.
 
 ---
 
@@ -87,6 +104,9 @@ This is where Lunaris Codex shines. Follow these steps to launch your training r
 git clone https://github.com/MeryylleA/lunariscodex.git
 cd lunariscodex
 
+# Switch to the dev/unified-architecture branch
+git checkout dev/unified-architecture
+
 # Create and activate a virtual environment (recommended)
 python3 -m venv .venv
 source .venv/bin/activate
@@ -104,19 +124,24 @@ Create a `train_config.yaml` file. This is where you define your model architect
 # --- Model Configuration ---
 # These parameters define the architecture of your LunarisCodex model.
 model:
-  vocab_size: 50304      # IMPORTANT: Must exactly match your tokenizer's vocabulary size.
-  d_model: 1024          # Dimensionality of the model embeddings and hidden states.
-  n_layers: 20           # Number of transformer blocks (layers).
-  n_heads: 16            # Number of attention heads (must divide d_model).
+  vocab_size: 50257      # IMPORTANT: Must exactly match your tokenizer's vocabulary size.
+  d_model: 768           # Dimensionality of the model embeddings and hidden states.
+  n_layers: 12           # Number of transformer blocks (layers).
+  n_heads: 12            # Number of attention heads (must divide d_model).
   max_seq_len: 1024     # Maximum sequence length the model can process.
   dropout: 0.0           # Dropout rate for regularization (0.0 to disable).
 
   # --- Advanced Architectural Features ---
-  n_kv_heads: 4          # Set to a value less than n_heads to enable Grouped Query Attention (GQA).
+  n_kv_heads: 12         # Set to a value less than n_heads to enable Grouped Query Attention (GQA).
                          # `n_heads` must be divisible by `n_kv_heads`. e.g., 16 heads, 4 kv_heads.
                          # Omit this or set to null to default to standard Multi-Head Attention.
   
-  use_gradient_checkpointing: true # Set to true to enable gradient checkpointing.
+  rope_head_dim: 64      # Dimension of the head to which RoPE is applied.
+                         # This enables Split-Head RoPE. Must be <= (d_model / n_heads).
+                         # E.g., for d_model=768, n_heads=12, head_dim is 64. 
+                         # Setting rope_head_dim=32 would apply RoPE to half the head.
+
+  use_gradient_checkpointing: true # Set to true to enable gradient checkpointing in the training script.
                                    # This saves a large amount of GPU memory at the cost of
                                    # slightly slower training iterations. Highly recommended for
                                    # large models or large batch sizes.
@@ -125,12 +150,12 @@ model:
 data_dir: "path/to/your/npy_shards/" # IMPORTANT: Point this to your directory of sharded .npy files.
 
 # --- Optimizer Configuration ---
-learning_rate: 2.0e-4    # Peak learning rate. Tune this carefully.
+learning_rate: 3.0e-4    # Peak learning rate. Tune this carefully.
 weight_decay: 0.1        # Weight decay for AdamW optimizer.
 
 # --- Scheduler Configuration ---
 warmup_steps: 2000       # Number of steps for linear learning rate warmup.
-max_steps: 200000        # Total number of training steps.
+max_steps: 600000        # Total number of training steps.
 
 # --- Training Configuration ---
 batch_size: 32           # Per-GPU batch size. Adjust based on your VRAM.
@@ -162,63 +187,6 @@ torchrun --standalone --nproc_per_node=auto train.py train_config.yaml
 The script will handle the rest: setting up distributed training (if applicable), compiling the model (if enabled), loading data, running the training loop, logging to the console and W&B (if configured), and saving checkpoints.
 
 Good luck, and we're excited to see what you build with Lunaris Codex!
-
----
-
-### Phase 3: Training on Google Cloud TPUs with `train_tpu.py` (Alternative)
-
-For users with access to Google Cloud TPUs, Lunaris Codex provides `train_tpu.py`, a dedicated script optimized for training on these powerful accelerators using PyTorch/XLA. This offers an alternative to GPU-based training, often enabling larger scale experiments.
-
-**Prerequisites:**
-
-*   **Google Cloud TPU Environment:** You must have a Google Cloud project with access to TPUs. This typically involves creating a TPU VM instance (e.g., a `ctpu` instance or a VM in a TPU Pod slice).
-*   **PyTorch/XLA Installation:** PyTorch/XLA needs to be installed in your environment. Google Cloud TPU VMs often come pre-configured with PyTorch and PyTorch/XLA. If not, you'll need to follow the official PyTorch/XLA installation instructions for your specific TPU setup.
-*   **Dependencies:** Ensure other dependencies from `requirements.txt` are installed in your TPU VM environment.
-
-**1. Setup the Environment (on the TPU VM):**
-Ensure you have cloned the repository and installed requirements on your TPU VM, similar to the GPU setup:
-```bash
-# Clone the repository (if not already done)
-# git clone https://github.com/MeryylleA/lunariscodex.git
-# cd lunariscodex
-
-# Create and activate a virtual environment (recommended)
-# python3 -m venv .venv
-# source .venv/bin/activate
-
-# Install dependencies (ensure PyTorch/XLA is already provided or installed correctly)
-pip install -r requirements.txt
-```
-
-**2. Configure Your Training Run:**
-You will use the same `train_config.yaml` file as described in "Phase 2: Model Training".
-*   **Data Path:** Ensure `data_dir` in your `train_config.yaml` points to the location of your sharded `.npy` files, accessible from the TPU VM.
-*   **TPU Specifics:** The `train_tpu.py` script is designed to work with XLA. Configuration options like `device` or `compile_model: true` in your `train_config.yaml` will be ignored, as XLA handles device management and compilation.
-
-**3. Launch the TPU Training:**
-Unlike the GPU script that uses `torchrun`, the `train_tpu.py` script is typically launched directly with Python. The script itself uses `xmp.spawn` internally to distribute the training across all available TPU cores.
-
-```bash
-# Launch training on all available TPU cores
-python train_tpu.py train_config.yaml
-```
-The script will automatically detect and utilize all TPU cores available to the VM. It will then proceed with data loading, model initialization on TPUs, and the training loop, logging progress and saving checkpoints as configured.
-
-**How PyTorch/XLA Enables TPU Training:**
-
-Google's TPUs require specialized software to interface with PyTorch code. This is where PyTorch/XLA comes in:
-
-*   **PyTorch/XLA:** This is a Python package that allows PyTorch to run on XLA (Accelerated Linear Algebra) devices, including Google TPUs. It acts as a bridge between your PyTorch model and the TPU hardware.
-*   **XLA Compilation:** When you run a PyTorch model with XLA, the XLA compiler takes your PyTorch operations and compiles them into highly optimized machine code specifically for the TPU architecture. This compilation step is key to achieving high performance on TPUs.
-*   **Distributed Training:** The `torch_xla` library provides tools like `xmp.spawn` (used internally by `train_tpu.py`) to easily launch your training script across all TPU cores in a distributed manner. It handles the complexities of:
-    *   **Data Parallelism:** Sharding the data and model replicas across TPU cores.
-    *   **Gradient Synchronization:** Efficiently aggregating gradients from all cores during the backward pass using `xm.optimizer_step`.
-    *   **Collective Operations:** Providing functions for synchronized actions like saving checkpoints (`xm.save`) or barrier synchronization (`xm.rendezvous`).
-*   **Optimized Data Loading:** `train_tpu.py` uses `torch_xla.distributed.parallel_loader.MpDeviceLoader`. This specialized data loader efficiently transfers data batches to the appropriate TPU cores, minimizing data transfer bottlenecks.
-
-By leveraging PyTorch/XLA, `train_tpu.py` abstracts away many of the low-level complexities of TPU programming, allowing you to focus on your model and training configuration.
-
----
 
 ## Best Practices for Pre-training
 
