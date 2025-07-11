@@ -1,359 +1,435 @@
 """
-
 Full definition of a LunarisCodex Language Model, all of it in this single file.
+This version is a refactored and simplified Llama-style model, created by adapting
+the robust, industry-standard components from the `Instella` (OLMo) architecture
+into a clean, minimal, and self-contained structure.
 
-FIXED VERSION addressing numerical stability issues for training.
+This version has been refactored to include KV Caching for efficient inference.
 
-References:
+This model includes modifications for μ-Parametrization (μP), specifically targeting
+the output layer's initialization and learning rate to improve training stability
+and enable hyperparameter transfer across model sizes, as described in
+"Tensor Programs V" (Yang et al., 2023).
 
-1) the official GPT-2 TensorFlow implementation released by OpenAI:
+This model has been augmented with LayerSkip (Gated Residual Connections) to allow
+the model to dynamically learn to skip sub-layers for each token.
 
-https://github.com/openai/gpt-2/blob/master/src/model.py
-
-2) huggingface/transformers PyTorch implementation:
-
-https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
-
+This version has been augmented with Split-Head RoPE, allowing each attention
+head to process both position-sensitive (RoPE) and position-agnostic features.
 """
 
 import math
-import inspect
 from dataclasses import dataclass
+import inspect
+from typing import Optional, Tuple, List
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-import torch.utils.checkpoint as checkpoint
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, device=None):
-    if device is None:
-        device = torch.device('cpu')
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, device=device).float() / dim))
-    t = torch.arange(end, device=device, dtype=torch.float32)
+
+@dataclass
+class LunarisCodexConfig:
+    d_model: int = 768
+    n_layers: int = 12
+    n_heads: int = 12
+    n_kv_heads: int = 12  # For GQA. If n_kv_heads == n_heads, it's MHA.
+    vocab_size: int = 50257
+    multiple_of: int = 256  # Make SwiGLU hidden layer size a multiple of this
+    ffn_hidden_multiplier: float = 4.0
+    max_seq_len: int = 1024
+    rope_theta: float = 10000.0
+    dropout: float = 0.0
+    # --- Split-Head RoPE Change: Add head dimension for RoPE ---
+    rope_head_dim: int = 64
+
+
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
+    """
+    Precomputes the rotary frequencies in complex number format.
+    Adapted from `instella_model.py`'s `RotaryEmbedding` but simplified
+    to use a buffer instead of a custom cache.
+    """
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
+    t = torch.arange(end, device=freqs.device, dtype=torch.float32)
     freqs = torch.outer(t, freqs)
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
+    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
     return freqs_cis
 
-def apply_rotary_emb(xq, xk, freqs_cis):
-    # Guarda o tipo original para converter de volta no final
-    original_dtype = xq.dtype
-    # Converte para float32 APENAS para a operação complexa
-    xq_float = xq.float()
-    xk_float = xk.float()
-    # Agora, opera nos tensores float32
-    xq_complex = torch.view_as_complex(xq_float.reshape(*xq_float.shape[:-1], -1, 2))
-    xk_complex = torch.view_as_complex(xk_float.reshape(*xk_float.shape[:-1], -1, 2))
-    # A multiplicação acontece em float32 complexo
-    xq_out_complex = xq_complex * freqs_cis
-    xk_out_complex = xk_complex * freqs_cis
-    # Converte de volta para real (ainda em float32)
-    xq_out = torch.view_as_real(xq_out_complex).flatten(3)
-    xk_out = torch.view_as_real(xk_out_complex).flatten(3)
-    # Converte o resultado final de volta para o dtype original (bfloat16)
-    return xq_out.to(original_dtype), xk_out.to(original_dtype)
+
+def apply_rotary_emb(
+    xq: torch.Tensor, xk: torch.Tensor, freqs_cis: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Applies rotary positional embeddings to query and key tensors.
+    """
+    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
+    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+
+    # Reshape freqs_cis for broadcasting
+    freqs_cis = freqs_cis.unsqueeze(0).unsqueeze(0)  # (1, 1, T, C/2)
+
+    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
+    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
+    return xq_out.type_as(xq), xk_out.type_as(xk)
+
 
 class RMSNorm(nn.Module):
-    """ Fixed Root Mean Square Layer Normalization """
-    def __init__(self, dim, eps=1e-5):
+    """
+    Root Mean Square Layer Normalization.
+    Adapted from `instella_model.py`'s `RMSLayerNorm`.
+    """
+    def __init__(self, dim: int, eps: float = 1e-5):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
-    def _norm(self, x):
-        # Upcast completo para float32, depois downcast do resultado
-        x_f32 = x.to(torch.float32)
-        variance = x_f32.pow(2).mean(-1, keepdim=True)
-        return (x_f32 * torch.rsqrt(variance + self.eps)).to(x.dtype)
+    def _norm(self, x: torch.Tensor):
+        # Upcast for stability, calculate RMS, and then downcast
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
-    def forward(self, x):
-        # A função _norm agora lida com a lógica de dtype de forma robusta
-        output = self._norm(x)
-        return output * self.weight
+    def forward(self, x: torch.Tensor):
+        # The forward pass is stable with mixed-precision training
+        output_dtype = x.dtype
+        x = self._norm(x.float()).to(output_dtype)
+        return x * self.weight
 
-class CausalSelfAttention(nn.Module):
-    def __init__(self, config):
+
+class Attention(nn.Module):
+    """
+    Grouped-Query Attention with Split-Head RoPE and KV Caching.
+    Logic adapted from `instella_model.py`'s `InstellaLlamaBlock`.
+    """
+    def __init__(self, config: LunarisCodexConfig):
         super().__init__()
+        self.config = config # --- Split-Head RoPE Change: Save config ---
         assert config.d_model % config.n_heads == 0
-        self.d_model = config.d_model
         self.n_heads = config.n_heads
-        self.n_kv_heads = config.n_kv_heads if config.n_kv_heads is not None else config.n_heads
-        assert self.n_heads % self.n_kv_heads == 0, "Number of heads must be divisible by number of key-value heads"
-        self.head_dim = self.d_model // self.n_heads
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(self.d_model, self.d_model + 2 * self.n_kv_heads * self.head_dim, bias=config.bias)
-        # output projection
-        self.c_proj = nn.Linear(self.d_model, self.d_model, bias=config.bias)
-        # regularization
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
-        self.dropout = config.dropout
-        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-        if not self.flash:
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.max_seq_len, config.max_seq_len))
-                                .view(1, 1, config.max_seq_len, config.max_seq_len))
+        self.n_kv_heads = config.n_kv_heads
+        self.head_dim = config.d_model // config.n_heads
 
-    def forward(self, x, freqs_cis):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (d_model)
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v = self.c_attn(x).split([self.d_model, self.n_kv_heads * self.head_dim, self.n_kv_heads * self.head_dim], dim=2)
-        q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2) # (B, nh, T, hs)
-        k = k.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2) # (B, n_kv_h, T, hs)
-        v = v.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2) # (B, n_kv_h, T, hs)
-        # apply rotary embeddings
-        q, k = apply_rotary_emb(q, k, freqs_cis)
-        # for GQA, repeat k and v heads to match q heads
-        if self.n_kv_heads < self.n_heads:
-            num_repeats = self.n_heads // self.n_kv_heads
-            k = k.repeat_interleave(num_repeats, dim=1)
-            v = v.repeat_interleave(num_repeats, dim=1)
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
-        else:
-            # manual implementation of attention
-            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-            att = F.softmax(att, dim=-1)
-            att = self.attn_dropout(att)
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
-        # output projection
-        y = self.resid_dropout(self.c_proj(y))
-        return y
+        # --- Split-Head RoPE Change: Add assertion ---
+        assert config.rope_head_dim <= self.head_dim, \
+            "RoPE dimension cannot be larger than head dimension."
 
-class SwiGLU(nn.Module):
-    """ SwiGLU Gated Linear Unit Feed-Forward Network """
-    def __init__(self, config):
-        super().__init__()
-        hidden_dim = 4 * config.d_model
-        hidden_dim = int(2 * hidden_dim / 3)
-        # custom multiple_of for efficiency
-        multiple_of = 256
-        hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-        self.gate_up_proj = nn.Linear(config.d_model, 2 * hidden_dim, bias=False)
-        self.down_proj = nn.Linear(hidden_dim, config.d_model, bias=False)
+        self.q_proj = nn.Linear(config.d_model, config.n_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(config.d_model, config.n_kv_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(config.d_model, config.n_kv_heads * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(config.n_heads * self.head_dim, config.d_model, bias=False)
         self.dropout = nn.Dropout(config.dropout)
 
-    def forward(self, x):
-        gate, up = self.gate_up_proj(x).chunk(2, dim=-1)
-        x = self.down_proj(F.silu(gate) * up)
-        x = self.dropout(x)
-        return x
+    def forward(
+        self,
+        x: torch.Tensor,
+        freqs_cis: torch.Tensor,
+        past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        B, T, C = x.shape  # batch size, sequence length, embedding dimensionality
+
+        # QKV projections
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+
+        # Reshape for attention calculation
+        q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)    # (B, n_heads, T, head_dim)
+        k = k.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2) # (B, n_kv_heads, T, head_dim)
+        v = v.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2) # (B, n_kv_heads, T, head_dim)
+
+        # --- Split-Head RoPE Change: Apply RoPE to a subset of the head dimension ---
+        rope_dim = self.config.rope_head_dim
+        
+        # Split the query and key heads into RoPE and non-RoPE parts
+        q_rope, q_nope = q.split([rope_dim, self.head_dim - rope_dim], dim=-1)
+        k_rope, k_nope = k.split([rope_dim, self.head_dim - rope_dim], dim=-1)
+
+        # Apply rotary embeddings only to the RoPE part
+        q_rope, k_rope = apply_rotary_emb(q_rope, k_rope, freqs_cis)
+        
+        # Concatenate the parts back together
+        q = torch.cat([q_rope, q_nope], dim=-1)
+        k = torch.cat([k_rope, k_nope], dim=-1)
+        # --------------------- End of Split-Head RoPE Change ---------------------
+
+        # KV Caching: if a past cache is provided, concatenate along the sequence dimension
+        if past_kv is not None:
+            past_k, past_v = past_kv
+            k = torch.cat((past_k, k), dim=-2)
+            v = torch.cat((past_v, v), dim=-2)
+        present_kv = (k, v)
+
+        # Grouped-Query Attention: repeat K and V heads
+        if self.n_kv_heads < self.n_heads:
+            n_repeats = self.n_heads // self.n_kv_heads
+            k = k.repeat_interleave(n_repeats, dim=1)
+            v = v.repeat_interleave(n_repeats, dim=1)
+
+        # Use flash attention. is_causal is True only for the prefill step.
+        is_causal = past_kv is None
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal)
+
+        # Concatenate heads and project back to embedding space
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        y = self.dropout(self.o_proj(y))
+
+        # Return attention output and the updated KV cache
+        return y, present_kv
+
+
+class FeedForward(nn.Module):
+    """
+    SwiGLU Feed-Forward Network.
+    Logic adapted from `instella_model.py`'s `SwiGLU` and Llama's FFN structure.
+    """
+    def __init__(self, config: LunarisCodexConfig):
+        super().__init__()
+        hidden_dim = int(config.ffn_hidden_multiplier * config.d_model)
+        hidden_dim = int(2 * hidden_dim / 3)
+        hidden_dim = config.multiple_of * ((hidden_dim + config.multiple_of - 1) // config.multiple_of)
+
+        self.w1 = nn.Linear(config.d_model, hidden_dim, bias=False)
+        self.w3 = nn.Linear(config.d_model, hidden_dim, bias=False)
+        self.w2 = nn.Linear(hidden_dim, config.d_model, bias=False)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x: torch.Tensor):
+        # SwiGLU activation
+        swiglu = F.silu(self.w1(x)) * self.w3(x)
+        return self.dropout(self.w2(swiglu))
+
 
 class Block(nn.Module):
-    def __init__(self, config):
+    """
+    A single Transformer block, Llama-style (pre-normalization), with LayerSkip
+    (Gated Residual Connections) and KV cache management.
+    """
+    def __init__(self, config: LunarisCodexConfig):
         super().__init__()
-        self.ln_1 = RMSNorm(config.d_model)
-        self.attn = CausalSelfAttention(config)
-        self.ln_2 = RMSNorm(config.d_model)
-        self.mlp = SwiGLU(config)
-        self.use_gradient_checkpointing = config.use_gradient_checkpointing
+        self.attention = Attention(config)
+        self.feed_forward = FeedForward(config)
+        self.attention_norm = RMSNorm(config.d_model)
+        self.ffn_norm = RMSNorm(config.d_model)
 
-    def _block_forward(self, x, freqs_cis):
-        """Helper function for the forward pass, used by checkpointing."""
-        x = x + self.attn(self.ln_1(x), freqs_cis)
-        x = x + self.mlp(self.ln_2(x))
-        return x
+        # --- LayerSkip Change: Add gating layers and biases ---
+        # These small linear layers learn a token-wise scalar gate.
+        self.attention_gate = nn.Linear(config.d_model, 1, bias=False)
+        self.ffn_gate = nn.Linear(config.d_model, 1, bias=False)
 
-    def forward(self, x, freqs_cis):
-        if self.training and self.use_gradient_checkpointing:
-            return checkpoint.checkpoint(self._block_forward, x, freqs_cis, use_reentrant=False)
-        else:
-            return self._block_forward(x, freqs_cis)
+        # We use a separate learnable bias to initialize the gates to be mostly
+        # open at the start of training. sigmoid(2.0) is ~0.88.
+        self.attention_gate_bias = nn.Parameter(torch.tensor(2.0))
+        self.ffn_gate_bias = nn.Parameter(torch.tensor(2.0))
+        # --------------------- End of LayerSkip Change ---------------------
 
-@dataclass
-class LunarisCodexConfig:
-    max_seq_len: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layers: int = 12
-    n_heads: int = 12
-    n_kv_heads: int = None # Number of key-value heads for GQA
-    d_model: int = 768
-    dropout: float = 0.0
-    bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    rope_theta: float = 10000.0
-    use_gradient_checkpointing: bool = False # Whether to use gradient checkpointing to save memory
+    def forward(
+        self,
+        x: torch.Tensor,
+        freqs_cis: torch.Tensor,
+        past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        # --- LayerSkip Change: Apply Gated Residual for Attention ---
+        normed_x = self.attention_norm(x)
+
+        # Calculate the attention gate value
+        g_attn_logits = self.attention_gate(normed_x) + self.attention_gate_bias
+        g_attn = torch.sigmoid(g_attn_logits)
+
+        # Get attention output, scaled by the gate
+        attn_output, new_kv = self.attention(normed_x, freqs_cis, past_kv)
+        h = x + g_attn * attn_output
+        # --------------------- End of LayerSkip Change ---------------------
+
+        # --- LayerSkip Change: Apply Gated Residual for FFN ---
+        normed_h = self.ffn_norm(h)
+
+        # Calculate the FFN gate value
+        g_ffn_logits = self.ffn_gate(normed_h) + self.ffn_gate_bias
+        g_ffn = torch.sigmoid(g_ffn_logits)
+
+        # Get FFN output, scaled by the gate
+        ffn_output = self.feed_forward(normed_h)
+        out = h + g_ffn * ffn_output
+        # --------------------- End of LayerSkip Change ---------------------
+
+        # Return the block's output and the updated cache from the attention layer
+        return out, new_kv
+
 
 class LunarisCodex(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config: LunarisCodexConfig):
         super().__init__()
-        assert config.vocab_size is not None
-        assert config.max_seq_len is not None
         self.config = config
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.d_model),
-            drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layers)]),
             ln_f = RMSNorm(config.d_model),
+            drop = nn.Dropout(config.dropout),
         ))
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
-        # pre-compute and register the freqs_cis as a buffer
+        # Tie input and output weights
+        self.transformer.wte.weight = self.lm_head.weight
+
+        # --- Split-Head RoPE Change: Precompute frequencies for rope_head_dim ---
+        # Precompute RoPE frequencies and register as a buffer
         freqs_cis = precompute_freqs_cis(
-            self.config.d_model // self.config.n_heads,
+            self.config.rope_head_dim,
             self.config.max_seq_len,
             self.config.rope_theta,
-            device=torch.device('cpu')
         )
-        self.register_buffer("freqs_cis", freqs_cis)
+        self.register_buffer("freqs_cis", freqs_cis, persistent=False)
+        # --------------------- End of Split-Head RoPE Change ---------------------
 
-        # init all weights
+        # Initialize weights
         self.apply(self._init_weights)
-        # report number of parameters
-        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
-    def get_num_params(self, non_embedding=True):
-        """
-        Return the number of parameters in the model.
-        For non-embedding count (default), the position embeddings get subtracted.
-        The token embeddings would too, except due to the parameter sharing these
-        params are actually used as weights in the final layer, so we include them.
-        """
-        n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding:
-            # With RoPE, there are no learned position embeddings
-            pass
-        return n_params
+        # Report number of parameters
+        print(f"Number of parameters: {self.get_num_params()/1e6:.2f}M")
+
+    def get_num_params(self) -> int:
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def _init_weights(self, module):
-        """
-        Initializes weights with a consistent, modern scheme.
-        This method is called by `self.apply(self._init_weights)`.
-        """
-        # Calculate the standard deviation for scaled initialization
-        std = 0.02 / math.sqrt(2 * self.config.n_layers)
-
-        # Handle container modules first to apply specific initializations to their children.
-        # This avoids double-initialization and ensures the correct scheme is used.
-        if isinstance(module, CausalSelfAttention):
-            # Scaled initialization for all linear layers in the attention block
-            torch.nn.init.normal_(module.c_attn.weight, mean=0.0, std=std)
-            torch.nn.init.normal_(module.c_proj.weight, mean=0.0, std=std)
-            if module.c_attn.bias is not None:
-                torch.nn.init.zeros_(module.c_attn.bias)
-            if module.c_proj.bias is not None:
-                torch.nn.init.zeros_(module.c_proj.bias)
-        elif isinstance(module, SwiGLU):
-            # Scaled initialization for the output projection layer (down_proj)
-            torch.nn.init.normal_(module.down_proj.weight, mean=0.0, std=std)
-            # Standard initialization for the fused input gate layer (gate_up_proj)
-            torch.nn.init.normal_(module.gate_up_proj.weight, mean=0.0, std=0.02)
-        # Handle leaf modules that are not part of the handled containers.
+        if isinstance(module, nn.Linear):
+            # --- μP Change: Special initialization for the output layer ---
+            # According to μP, the output layer (lm_head) should be initialized
+            # with a much smaller variance, ideally zero, to stabilize training
+            # across different model widths.
+            if module is self.lm_head:
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.0)
+            else:
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            # --------------------- End of μP Change ---------------------
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            # Standard initialization for token embeddings
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif isinstance(module, RMSNorm):
-            # Initialize RMSNorm weights to 1
-            torch.nn.init.ones_(module.weight)
 
-        # Note: We do NOT provide a generic `elif isinstance(module, nn.Linear)` rule.
-        # This is intentional. The linear layers within CausalSelfAttention and SwiGLU
-        # are already handled above. The only remaining nn.Linear is the `lm_head`,
-        # whose weights are tied to `wte` and should not be re-initialized. This
-        # strategy correctly avoids corrupting the weight tying.
+        # Apply special scaled initialization for residual projections
+        if isinstance(module, (Attention, FeedForward)):
+            for name, p in module.named_parameters():
+                if name.endswith("o_proj.weight") or name.endswith("w2.weight"):
+                    torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * self.config.n_layers))
 
-    def forward(self, idx, targets=None):
-        device = idx.device
-        b, t = idx.size()
-        assert t <= self.config.max_seq_len, f"Cannot forward sequence of length {t}, block size is only {self.config.max_seq_len}"
+    def forward(
+        self,
+        idx: torch.Tensor,
+        targets: Optional[torch.Tensor] = None,
+        past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], List[Tuple[torch.Tensor, torch.Tensor]]]:
+        B, T = idx.shape
 
-        # pre-computed rotary embeddings for the sequence
-        freqs_cis = self.freqs_cis[:t]
+        # Determine start position for RoPE from the cache length
+        start_pos = past_key_values[0][0].shape[-2] if past_key_values is not None else 0
+        assert start_pos + T <= self.config.max_seq_len, \
+            f"Cannot forward, sequence length {start_pos + T} exceeds model's max_seq_len {self.config.max_seq_len}"
 
-        # forward the LunarisCodex model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, d_model)
-        x = self.transformer.drop(tok_emb)
-        for block in self.transformer.h:
-            x = block(x, freqs_cis)
+        # Get token embeddings
+        x = self.transformer.wte(idx)
+        x = self.transformer.drop(x)
+
+        # Get precomputed RoPE frequencies for the current sequence length and position
+        freqs_cis = self.freqs_cis[start_pos : start_pos + T]
+
+        # Forward through the transformer blocks, managing the cache
+        new_past_key_values = []
+        for i, block in enumerate(self.transformer.h):
+            past_kv_for_block = past_key_values[i] if past_key_values is not None else None
+            x, new_kv = block(x, freqs_cis, past_kv_for_block)
+            new_past_key_values.append(new_kv)
+
+        # Final normalization
         x = self.transformer.ln_f(x)
 
         if targets is not None:
-            # if we are given some desired targets also calculate the loss
+            # If training, compute loss
             logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            # At inference, only compute logits for the last token for efficiency
+            logits = self.lm_head(x[:, [-1], :])
             loss = None
 
-        return logits, loss
-
-    @classmethod
-    def from_pretrained(cls, model_type, override_args=None):
-        raise NotImplementedError("from_pretrained is not supported in this architecture.")
+        return logits, loss, new_past_key_values
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
-        # start with all of the candidate parameters
-        param_dict = {pn: p for pn, p in self.named_parameters()}
-        # filter out those that do not require grad
-        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
-        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
-        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        # --- μP Change: Create a separate parameter group for the output layer ---
+        # The core idea of μP is to scale the learning rates of different layers
+        # differently based on how their dimensions change with model width.
+        # The output layer (lm_head) requires a much smaller learning rate
+        # than the rest of the model. Here we use a simple fixed scaling factor.
+
+        # Start with all of the candidate parameters
+        param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
+
+        # Isolate the lm_head parameters
+        lm_head_params = [p for n, p in param_dict.items() if n.startswith("lm_head")]
+        # Create a dictionary of the rest of the parameters
+        other_params = {pn: p for pn, p in param_dict.items() if not pn.startswith("lm_head")}
+
+        # Create optimizer groups for the "other" parameters.
+        # Any 2D parameter will be weight decayed, otherwise no.
+        decay_params = [p for n, p in other_params.items() if p.dim() >= 2]
+        nodecay_params = [p for n, p in other_params.items() if p.dim() < 2]
+
+        # The lm_head weight is 2D, so it should be decayed. It has no bias.
         optim_groups = [
             {'params': decay_params, 'weight_decay': weight_decay},
-            {'params': nodecay_params, 'weight_decay': 0.0}
+            {'params': nodecay_params, 'weight_decay': 0.0},
+            # Special group for the output layer with a scaled LR.
+            # We use a fixed factor of 0.1 as a simple but effective heuristic.
+            {'params': lm_head_params, 'weight_decay': weight_decay, 'lr': learning_rate * 0.1}
         ]
+        # --------------------- End of μP Change ---------------------
+
         num_decay_params = sum(p.numel() for p in decay_params)
         num_nodecay_params = sum(p.numel() for p in nodecay_params)
-        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
-        # Create AdamW optimizer and use the fused version if it is available
+        num_lm_head_params = sum(p.numel() for p in lm_head_params)
+        print(f"num decayed parameter tensors (excluding lm_head): {len(decay_params)}, with {num_decay_params:,} parameters")
+        print(f"num non-decayed parameter tensors (excluding lm_head): {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        print(f"num lm_head parameter tensors: {len(lm_head_params)}, with {num_lm_head_params:,} parameters (using scaled LR)")
+
+        # The default learning rate in AdamW is applied to groups that don't have an 'lr' key.
+        # The lm_head group overrides this with its own specified learning rate.
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == 'cuda'
-        extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, fused=use_fused)
         print(f"using fused AdamW: {use_fused}")
         return optimizer
-
-    def estimate_mfu(self, fwdbwd_per_iter, dt):
-        """ estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS """
-        # first estimate the number of flops we do per iteration.
-        # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
-        N = self.get_num_params()
-        cfg = self.config
-        L, H, Q, T = cfg.n_layers, cfg.n_heads, cfg.d_model//cfg.n_heads, cfg.max_seq_len
-        flops_per_token = 6*N + 12*L*H*Q*T
-        flops_per_fwdbwd = flops_per_token * T
-        flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
-        # express our flops throughput as ratio of A100 bfloat16 peak flops
-        flops_achieved = flops_per_iter * (1.0/dt) # per second
-        flops_promised = 312e12 # A100 GPU bfloat16 peak flops is 312 TFLOPS
-        mfu = flops_achieved / flops_promised
-        return mfu
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
         """
-        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
-        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        Generates text by efficiently using the KV cache.
+        The first pass (prefill) processes the prompt. Subsequent passes process
+        only the most recent token.
         """
+        self.eval()
+        past_key_values = None
+
         for _ in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at max_seq_len
-            idx_cond = idx if idx.size(1) <= self.config.max_seq_len else idx[:, -self.config.max_seq_len:]
-            # forward the model to get the logits for the index in the sequence
-            logits, _ = self(idx_cond)
-            # pluck the logits at the final step and scale by desired temperature
+            # Stop generating if the context window is full
+            current_len = past_key_values[0][0].shape[-2] if past_key_values else idx.shape[1]
+            if current_len >= self.config.max_seq_len:
+                break
+
+            # If a cache exists, use the last token as input. Otherwise, use the full prompt.
+            idx_cond = idx if past_key_values is None else idx[:, -1:]
+
+            # Forward pass with the cache
+            logits, _, past_key_values = self(idx_cond, past_key_values=past_key_values)
+
+            # Sample the next token
             logits = logits[:, -1, :] / temperature
-            # optionally crop the logits to only the top k options
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float('Inf')
-            # apply softmax to convert logits to (normalized) probabilities
             probs = F.softmax(logits, dim=-1)
-            # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1)
-            # append sampled index to the running sequence and continue
+
+            # Append the new token for the next iteration
             idx = torch.cat((idx, idx_next), dim=1)
+
+        self.train()
         return idx
