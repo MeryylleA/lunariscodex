@@ -163,63 +163,6 @@ The script will handle the rest: setting up distributed training (if applicable)
 
 Good luck, and we're excited to see what you build with Lunaris Codex!
 
----
-
-### Phase 3: Training on Google Cloud TPUs with `train_tpu.py` (Alternative)
-
-For users with access to Google Cloud TPUs, Lunaris Codex provides `train_tpu.py`, a dedicated script optimized for training on these powerful accelerators using PyTorch/XLA. This offers an alternative to GPU-based training, often enabling larger scale experiments.
-
-**Prerequisites:**
-
-*   **Google Cloud TPU Environment:** You must have a Google Cloud project with access to TPUs. This typically involves creating a TPU VM instance (e.g., a `ctpu` instance or a VM in a TPU Pod slice).
-*   **PyTorch/XLA Installation:** PyTorch/XLA needs to be installed in your environment. Google Cloud TPU VMs often come pre-configured with PyTorch and PyTorch/XLA. If not, you'll need to follow the official PyTorch/XLA installation instructions for your specific TPU setup.
-*   **Dependencies:** Ensure other dependencies from `requirements.txt` are installed in your TPU VM environment.
-
-**1. Setup the Environment (on the TPU VM):**
-Ensure you have cloned the repository and installed requirements on your TPU VM, similar to the GPU setup:
-```bash
-# Clone the repository (if not already done)
-# git clone https://github.com/MeryylleA/lunariscodex.git
-# cd lunariscodex
-
-# Create and activate a virtual environment (recommended)
-# python3 -m venv .venv
-# source .venv/bin/activate
-
-# Install dependencies (ensure PyTorch/XLA is already provided or installed correctly)
-pip install -r requirements.txt
-```
-
-**2. Configure Your Training Run:**
-You will use the same `train_config.yaml` file as described in "Phase 2: Model Training".
-*   **Data Path:** Ensure `data_dir` in your `train_config.yaml` points to the location of your sharded `.npy` files, accessible from the TPU VM.
-*   **TPU Specifics:** The `train_tpu.py` script is designed to work with XLA. Configuration options like `device` or `compile_model: true` in your `train_config.yaml` will be ignored, as XLA handles device management and compilation.
-
-**3. Launch the TPU Training:**
-Unlike the GPU script that uses `torchrun`, the `train_tpu.py` script is typically launched directly with Python. The script itself uses `xmp.spawn` internally to distribute the training across all available TPU cores.
-
-```bash
-# Launch training on all available TPU cores
-python train_tpu.py train_config.yaml
-```
-The script will automatically detect and utilize all TPU cores available to the VM. It will then proceed with data loading, model initialization on TPUs, and the training loop, logging progress and saving checkpoints as configured.
-
-**How PyTorch/XLA Enables TPU Training:**
-
-Google's TPUs require specialized software to interface with PyTorch code. This is where PyTorch/XLA comes in:
-
-*   **PyTorch/XLA:** This is a Python package that allows PyTorch to run on XLA (Accelerated Linear Algebra) devices, including Google TPUs. It acts as a bridge between your PyTorch model and the TPU hardware.
-*   **XLA Compilation:** When you run a PyTorch model with XLA, the XLA compiler takes your PyTorch operations and compiles them into highly optimized machine code specifically for the TPU architecture. This compilation step is key to achieving high performance on TPUs.
-*   **Distributed Training:** The `torch_xla` library provides tools like `xmp.spawn` (used internally by `train_tpu.py`) to easily launch your training script across all TPU cores in a distributed manner. It handles the complexities of:
-    *   **Data Parallelism:** Sharding the data and model replicas across TPU cores.
-    *   **Gradient Synchronization:** Efficiently aggregating gradients from all cores during the backward pass using `xm.optimizer_step`.
-    *   **Collective Operations:** Providing functions for synchronized actions like saving checkpoints (`xm.save`) or barrier synchronization (`xm.rendezvous`).
-*   **Optimized Data Loading:** `train_tpu.py` uses `torch_xla.distributed.parallel_loader.MpDeviceLoader`. This specialized data loader efficiently transfers data batches to the appropriate TPU cores, minimizing data transfer bottlenecks.
-
-By leveraging PyTorch/XLA, `train_tpu.py` abstracts away many of the low-level complexities of TPU programming, allowing you to focus on your model and training configuration.
-
----
-
 ## Best Practices for Pre-training
 
 Achieving optimal results when pre-training large language models requires careful attention to various aspects of the process. Here are some best practices to consider when using Lunaris Codex:
