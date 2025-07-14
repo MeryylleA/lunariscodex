@@ -23,10 +23,10 @@ Lunaris Codex is engineered for a balance of performance and clarity. Its archit
 
 | Component | Implementation | Benefits & Considerations |
 | :--- | :--- | :--- |
-| **Normalization** | **RMSNorm with Learnable Bias** | **Benefits:** More expressive than standard RMSNorm. The learnable bias allows the model to learn an optimal activation mean, enhancing stability by preventing mean-shift in deep networks. |
+| **Normalization** | **RMSNorm** | **Benefits:** A simpler, more efficient normalization technique than standard LayerNorm. It stabilizes training by normalizing activations based on their root mean square, using a single learnable gain parameter. |
 | **Positional Info**| **RoPE (Rotary Positional Embeddings)** | **Benefits:** Injects relative positional information, leading to excellent generalization across various sequence lengths. Achieved without any learned parameters, making it efficient. |
 | **Attention** | **Grouped Query Attention (GQA)** | **Benefits:** Drastically reduces the memory usage of the KV cache during inference by sharing Key/Value heads across groups of Query heads. This enables faster generation and larger context windows. |
-| **FFN Activation**| **SwiGLU with Fused Projection** | **Benefits:** Offers improved performance over traditional activations. The gate and up-projections are fused into a single linear layer, improving GPU performance by reducing kernel overhead. |
+| **FFN Activation**| **SwiGLU** | **Benefits:** Offers improved performance over traditional activations like ReLU. It uses a gated linear unit, which allows the network to control the flow of information through the activation. |
 | **Training** | **Gradient Checkpointing** | **Benefits:** Massively reduces VRAM usage during training by recomputing activations during the backward pass instead of storing them. This allows for training larger models or using larger batch sizes, at the cost of a small compute overhead. |
 | **Structure** | **Pre-LayerNorm Decoder-Only Transformer** | **Benefits:** A standard, proven architecture for autoregressive language modeling. Pre-LayerNorm (applying normalization before attention/FFN) enhances training stability, especially for deep networks. |
 | **Embeddings** | **Tied Input/Output Token Embeddings** | **Benefits:** Significantly reduces the model's parameter count by sharing weights between the token embedding layer and the final output layer. Can also improve model quality and training efficiency. |
