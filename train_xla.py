@@ -311,7 +311,7 @@ def _mp_fn(index, config_path: str):
     # TPUs have excellent bfloat16 support - simplified from original
     dtype = torch.bfloat16
     # The `autocast` context manager automatically performs model operations in bfloat16
-    ctx = torch.amp.autocast(device_type='cuda', dtype=dtype)  # Note: 'cuda' works for TPU autocast
+    ctx = torch.amp.autocast(device_type='xla', dtype=dtype)
 
     # Master process handles all setup printing and directory creation.
     if is_master_process:
@@ -350,7 +350,7 @@ def _mp_fn(index, config_path: str):
         batch_size=config.batch_size, 
         sampler=train_sampler, 
         num_workers=4, 
-        pin_memory=True
+        pin_memory=False
     )
 
     # --- Model Initialization ---
