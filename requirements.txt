@@ -27,7 +27,7 @@ aiohttp==3.12.14
 
 # ===== EXPERIMENT TRACKING =====
 wandb==0.21.0
-sentry-sdk==2.32.0
+sentry-sdk==2.33.0
 
 # ===== VERSION CONTROL =====
 GitPython==3.1.44
