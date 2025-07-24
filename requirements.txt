@@ -30,7 +30,7 @@ wandb==0.21.0
 sentry-sdk==2.33.2
 
 # ===== VERSION CONTROL =====
-GitPython==3.1.44
+GitPython==3.1.45
 
 # ===== IMAGE PROCESSING =====
 pillow==11.3.0
