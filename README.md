@@ -98,6 +98,9 @@ This is where Lunaris Codex shines. Follow these steps to launch your training r
 git clone https://github.com/MeryylleA/lunariscodex.git
 cd lunariscodex
 
+# IMPORTANT: Switch to the MoE experimental branch
+git checkout moe-experiment
+
 # Create and activate a virtual environment (recommended)
 python3 -m venv .venv
 source .venv/bin/activate
