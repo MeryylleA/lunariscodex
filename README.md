@@ -1,19 +1,20 @@
 # Lunaris Codex
 
-> **Note:** You are viewing an experimental branch of Lunaris Codex. This version includes state-of-the-art architectural features for enhanced performance and training efficiency. These features are currently under evaluation.
+> **Note:** You are viewing an **experimental branch** of Lunaris Codex.  
+> This version introduces a **Mixture-of-Experts (MoE) layer** in the style of the **Switch Transformer (k=1)**.  
+> All MoE-related code lives in `model_moe.py` and is trained with `train_moe.py`.  
+> These features are under active evaluation—expect breaking changes and rapid iteration.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/discord/1138864753915854898?label=Discord&logo=discord&color=7289DA)](https://discord.gg/JNsfzEwMtC)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MeryylleA/lunariscodex)
 
-A Note on Our Foundation: The architectural foundation of Lunaris Codex is proudly built upon Andrej Karpathy's nanoGPT. We chose nanoGPT for its brilliant simplicity and clarity, which aligns perfectly with our philosophy of providing a "hackable" and understandable base. This version, however, represents a significant evolution, integrating modern enhancements like **RoPE, Grouped Query Attention (GQA), Fused SwiGLU, and Gradient Checkpointing** to push performance and capabilities far beyond the original.
+A Note on Our Foundation: The architectural foundation of Lunaris Codex is proudly built upon Andrej Karpathy's nanoGPT. We chose nanoGPT for its brilliant simplicity and clarity, which aligns perfectly with our philosophy of providing a "hackable" and understandable base. This version, however, represents a significant evolution, integrating modern enhancements like **RoPE, Grouped Query Attention (GQA), Fused SwiGLU, Gradient Checkpointing**, and now **Mixture-of-Experts (MoE)** to push performance and capabilities far beyond the original.
 
 **Lunaris Codex** is a streamlined, high-performance toolkit for pre-training powerful language models from scratch. This project provides a modern, Llama-style Transformer architecture and a robust, heavily optimized training script, designed for stability and maximum throughput.
 
 ### Our Philosophy
 This repository is built on a simple, powerful idea: **provide a rock-solid, understandable foundation for creating strong base models.** We focus on clean, efficient, and well-documented code for the core tasks of model definition and training. This approach empowers researchers and developers to bring their own unique datasets to a proven, production-grade pipeline.
-
-This new version marks a significant evolution of the project, moving to an architecture inspired by industry-leading models like Llama and Mistral, with a strong emphasis on modern best practices.
 
 ---
 
@@ -23,19 +24,20 @@ Lunaris Codex is engineered for a balance of performance and clarity. Its archit
 
 | Component | Implementation | Benefits & Considerations |
 | :--- | :--- | :--- |
-| **Normalization** | **RMSNorm** | **Benefits:** A simpler, more efficient normalization technique than standard LayerNorm. It stabilizes training by normalizing activations based on their root mean square, using a single learnable gain parameter. |
-| **Positional Info**| **RoPE (Rotary Positional Embeddings)** | **Benefits:** Injects relative positional information, leading to excellent generalization across various sequence lengths. Achieved without any learned parameters, making it efficient. |
-| **Attention** | **Grouped Query Attention (GQA)** | **Benefits:** Drastically reduces the memory usage of the KV cache during inference by sharing Key/Value heads across groups of Query heads. This enables faster generation and larger context windows. |
-| **FFN Activation**| **SwiGLU** | **Benefits:** Offers improved performance over traditional activations like ReLU. It uses a gated linear unit, which allows the network to control the flow of information through the activation. |
-| **Training** | **Gradient Checkpointing** | **Benefits:** Massively reduces VRAM usage during training by recomputing activations during the backward pass instead of storing them. This allows for training larger models or using larger batch sizes, at the cost of a small compute overhead. |
-| **Structure** | **Pre-LayerNorm Decoder-Only Transformer** | **Benefits:** A standard, proven architecture for autoregressive language modeling. Pre-LayerNorm (applying normalization before attention/FFN) enhances training stability, especially for deep networks. |
-| **Embeddings** | **Tied Input/Output Token Embeddings** | **Benefits:** Significantly reduces the model's parameter count by sharing weights between the token embedding layer and the final output layer. Can also improve model quality and training efficiency. |
+| **Normalization** | **RMSNorm** | A simpler, more efficient normalization technique than standard LayerNorm. It stabilizes training by normalizing activations based on their root mean square, using a single learnable gain parameter. |
+| **Positional Info**| **RoPE (Rotary Positional Embeddings)** | Injects relative positional information, leading to excellent generalization across various sequence lengths. Achieved without any learned parameters, making it efficient. |
+| **Attention** | **Grouped Query Attention (GQA)** | Drastically reduces the memory usage of the KV cache during inference by sharing Key/Value heads across groups of Query heads. This enables faster generation and larger context windows. |
+| **FFN Activation**| **SwiGLU** | Offers improved performance over traditional activations like ReLU. It uses a gated linear unit, which allows the network to control the flow of information through the activation. |
+| **Mixture-of-Experts (MoE)** | **Switch-style (k=1) Router + Expert FFNs** | **Benefits:** Achieves a much larger effective parameter count **without** increasing computation per forward pass. Each token is routed to exactly **one** expert (k=1), keeping FLOPs constant while unlocking model capacity. **Considerations:** Requires an auxiliary load-balancing loss to prevent expert collapse and ensure uniform utilization. |
+| **Training** | **Gradient Checkpointing** | Massively reduces VRAM usage during training by recomputing activations during the backward pass instead of storing them. This allows for training larger models or using larger batch sizes, at the cost of a small compute overhead. |
+| **Structure** | **Pre-LayerNorm Decoder-Only Transformer** | A standard, proven architecture for autoregressive language modeling. Pre-LayerNorm (applying normalization before attention/FFN) enhances training stability, especially for deep networks. |
+| **Embeddings** | **Tied Input/Output Token Embeddings** | Significantly reduces the model's parameter count by sharing weights between the token embedding layer and the final output layer. Can also improve model quality and training efficiency. |
 
 ---
 
 ## The Training Pipeline
 
-Our `train.py` script is a feature-rich and resilient trainer, meticulously engineered to handle large-scale, long-running jobs with stability and efficiency.
+Our `train_moe.py` script is a feature-rich and resilient trainer, meticulously engineered to handle large-scale, long-running jobs with stability and efficiency. It is **specifically adapted** for the MoE architecture.
 
 *   **Engineered for Scale:** Designed to process terabytes of data and sustain training for extended periods (days or weeks) without interruption.
 *   **Optimized Data Loading (`ShardDataset`):** Employs a memory-mapped `ShardDataset` class, which efficiently streams data from massive datasets sharded into multiple `.npy` files. This approach minimizes RAM overhead while maximizing I/O throughput.
@@ -48,7 +50,16 @@ Our `train.py` script is a feature-rich and resilient trainer, meticulously engi
     *   **Gradient Clipping:** Implements gradient clipping to prevent exploding gradients and stabilize training.
 *   **Precise Learning Rate Control:** Features a learning rate scheduler with a linear warmup phase followed by a cosine decay. This allows for fine-grained control over the learning rate trajectory, crucial for stable convergence.
 *   **Resilient Checkpointing:** Automatically resumes from the latest checkpoint if training is interrupted. Checkpoints save the complete training state (model weights, optimizer state, step count, epoch, and training configuration) to ensure no progress is lost and facilitate seamless continuation.
-*   **Comprehensive Monitoring:** Integrates with Weights & Biases (W&B) for detailed experiment tracking (loss, perplexity, learning rate, etc.) and provides informative console logging with progress bars via `tqdm`.
+*   **Comprehensive Monitoring:** Integrates with Weights & Biases (W&B) for detailed experiment tracking (loss, perplexity, learning rate, gradient norms, **main_loss**, **aux_loss**, etc.) and provides informative console logging with progress bars via `tqdm`.
+
+### Auxiliary Load-Balancing Loss (`aux_loss`)
+
+Because only a **sparse subset** of experts is active for any given token, there is a risk that the gating network will **collapse**—always routing tokens to the same few experts.  
+To prevent this, we add an **auxiliary loss** (`aux_loss`) that encourages uniform expert utilization.
+
+*   **Mechanism:** The loss is computed as the dot product between (a) the **fraction of tokens dispatched to each expert** and (b) the **fraction of router probability mass assigned to each expert** (see `MixtureOfExperts.forward()` for the exact formula).
+*   **Scaling:** The loss is multiplied by `config.aux_loss_weight` (default: `1e-2`, taken from the Switch Transformer paper) before being added to the **main cross-entropy loss**.
+*   **Logging:** `train_moe.py` logs `main_loss`, `aux_loss`, and their sum separately in both the console and Weights & Biases, making it easy to verify that experts are being used evenly.
 
 ---
 
@@ -96,146 +107,75 @@ pip install -r requirements.txt
 ```
 
 **2. Configure Your Training Run:**
-Create a `train_config.yaml` file. This is where you define your model architecture, hyperparameters, and data paths. Below is a well-commented example configuration that shows how to use the new features.
+Create a `train_config_moe.yaml` file. This is where you define your model architecture, hyperparameters, and data paths. Below is a well-commented example configuration that shows how to use the new MoE features.
 
 ```yaml
-# train_config.yaml
+# train_config_moe.yaml
 
 # --- Model Configuration ---
-# These parameters define the architecture of your LunarisCodex model.
 model:
-  vocab_size: 50304      # IMPORTANT: Must exactly match your tokenizer's vocabulary size.
-  d_model: 1024          # Dimensionality of the model embeddings and hidden states.
-  n_layers: 20           # Number of transformer blocks (layers).
-  n_heads: 16            # Number of attention heads (must divide d_model).
-  max_seq_len: 1024     # Maximum sequence length the model can process.
-  dropout: 0.0           # Dropout rate for regularization (0.0 to disable).
+  vocab_size: 50304          # MUST match your tokenizer's vocab size
+  d_model: 1024
+  n_layers: 20
+  n_heads: 16
+  n_kv_heads: 4              # Enable GQA: n_heads must be divisible by n_kv_heads
+  max_seq_len: 1024
+  dropout: 0.0
 
-  # --- Advanced Architectural Features ---
-  n_kv_heads: 4          # Set to a value less than n_heads to enable Grouped Query Attention (GQA).
-                         # `n_heads` must be divisible by `n_kv_heads`. e.g., 16 heads, 4 kv_heads.
-                         # Omit this or set to null to default to standard Multi-Head Attention.
-  
-  use_gradient_checkpointing: true # Set to true to enable gradient checkpointing.
-                                   # This saves a large amount of GPU memory at the cost of
-                                   # slightly slower training iterations. Highly recommended for
-                                   # large models or large batch sizes.
+  # --- MoE-specific settings ---
+  n_experts: 8               # Number of expert FFNs in each MoE layer
+  n_experts_per_token: 1     # Switch-style routing: 1 expert per token
+  aux_loss_weight: 0.01      # Weight for the load-balancing auxiliary loss
 
 # --- Data Configuration ---
-data_dir: "path/to/your/npy_shards/" # IMPORTANT: Point this to your directory of sharded .npy files.
+data_dir: "path/to/your/npy_shards/"
 
-# --- Optimizer Configuration ---
-learning_rate: 2.0e-4    # Peak learning rate. Tune this carefully.
-weight_decay: 0.1        # Weight decay for AdamW optimizer.
+# --- Optimizer & Scheduler ---
+learning_rate: 2.0e-4
+weight_decay: 0.1
+warmup_steps: 2000
+max_steps: 200000
 
-# --- Scheduler Configuration ---
-warmup_steps: 2000       # Number of steps for linear learning rate warmup.
-max_steps: 200000        # Total number of training steps.
+# --- Training ---
+batch_size: 32
+gradient_accumulation_steps: 4
+grad_clip: 1.0
+compile_model: true
 
-# --- Training Configuration ---
-batch_size: 32           # Per-GPU batch size. Adjust based on your VRAM.
-gradient_accumulation_steps: 4 # Accumulates gradients over N micro-batches.
-                         # Effective batch size = batch_size * num_gpus * gradient_accumulation_steps.
-grad_clip: 1.0           # Gradient clipping value to prevent exploding gradients.
-compile_model: true      # Whether to use torch.compile for potential speedups.
+# --- I/O & Logging ---
+out_dir: "checkpoints/lunaris-moe"
+save_interval: 1000
+log_interval: 20
 
-# --- I/O and Logging ---
-out_dir: "checkpoints/my-model-run"   # Directory to save checkpoints.
-save_interval: 1000      # Save a checkpoint every N steps.
-log_interval: 20         # Log metrics to console/W&B every N steps.
-
-# --- W&B (Weights & Biases) Configuration (Optional) ---
-wandb_project: null                # Your W&B project name (e.g., "MyLunarisProject"). Keep as null or remove to disable.
-wandb_run_name: "experiment-001"   # A name for this specific run (e.g., "gqa-llama-run1").
-# wandb_entity: null               # Your W&B entity/team name (if applicable).
+# --- Weights & Biases (optional) ---
+wandb_project: "lunaris-codex-moe"
+wandb_run_name: "moe-8ex-gqa-20L"
 ```
 
 **3. Launch the Training!**
-The `train.py` script uses `torchrun` for launching. This command is suitable for single-GPU, multi-GPU on a single node. For multi-node training, additional arguments for `torchrun` like `--nnodes`, `--node_rank`, `--rdzv_id`, `--rdzv_backend`, `--rdzv_endpoint` would be required.
-
 ```bash
-# For single-GPU or single-node multi-GPU training:
-# 'auto' will attempt to use all available GPUs on the node.
-# If you want to specify the number of GPUs, use e.g., --nproc_per_node=2 for 2 GPUs.
-torchrun --standalone --nproc_per_node=auto train.py train_config.yaml
+# Single-GPU or single-node multi-GPU
+torchrun --standalone --nproc_per_node=auto train_moe.py train_config_moe.yaml
 ```
-The script will handle the rest: setting up distributed training (if applicable), compiling the model (if enabled), loading data, running the training loop, logging to the console and W&B (if configured), and saving checkpoints.
+The script will handle the rest: setting up distributed training, compiling the model, loading data, running the training loop, logging, and saving checkpoints.
 
-Good luck, and we're excited to see what you build with Lunaris Codex!
+---
 
 ## Best Practices for Pre-training
 
-Achieving optimal results when pre-training large language models requires careful attention to various aspects of the process. Here are some best practices to consider when using Lunaris Codex:
-
-*   **Data Quality and Diversity**:
-    *   **Foundation First**: The performance, capabilities, and biases of your model are overwhelmingly determined by your training data. "Garbage in, garbage out" very much applies.
-    *   **Prioritize Quality**: Use high-quality, well-cleaned, and diverse datasets. Invest time in preprocessing your data, which can include deduplication, filtering inappropriate content, and ensuring consistent formatting.
-    *   **Diversity Matters**: A model trained on diverse text (e.g., web crawls, books, code, scientific papers, conversational text) will generally be more robust and adaptable.
-
-*   **Tokenizer Choice and Configuration**:
-    *   **Domain Alignment**: Train a tokenizer that is appropriate for your target domain(s) and language(s). A well-suited tokenizer can significantly impact performance and convergence.
-    *   **Vocabulary Size**: Remember that the `model.vocab_size` parameter in your `train_config.yaml` must exactly match the vocabulary size of your trained tokenizer.
-
-*   **Choosing Model Size (`d_model`, `n_layers`, `n_heads`)**:
-    *   **Resource Balancing**: Select model parameters based on your available compute resources (GPU VRAM, total training time budget). Larger models require more memory and take longer to train.
-    *   **Iterate and Scale**: It's often wise to start with smaller model configurations (e.g., fewer layers/heads, smaller `d_model`) to debug your entire pipeline, ensure data loading is correct, and iterate on hyperparameters quickly. Once you have a stable setup, you can scale up.
-
-*   **Hyperparameter Tuning**:
-    *   **Start with Defaults**: The `train_config.yaml` provides sensible starting points. However, optimal hyperparameters are often dataset-dependent.
-    *   **Key Parameters**: If you're tuning, `learning_rate` is often the most critical. `batch_size` (and `gradient_accumulation_steps`) and `warmup_steps` are also commonly adjusted.
-    *   **Systematic Approach**: Tune one or two hyperparameters at a time to understand their impact.
-
-*   **Monitoring Training Effectively**:
-    *   **Use W&B**: We strongly recommend enabling Weights & Biases logging (`wandb_project` in `train_config.yaml`). It provides invaluable insights into loss curves, learning rate schedules, gradient norms, hardware utilization, and more, helping you track progress and spot potential issues early.
-    *   **Console Logs**: The `tqdm` progress bar provides immediate console feedback on loss and learning rate.
-    *   **Watch for Issues**: Regularly check for signs of overfitting (training loss decreases but validation/downstream performance stagnates or degrades) or underfitting (training loss remains high).
-
-*   **Understanding the Learning Rate Schedule**:
-    *   **Warmup Phase**: The initial warmup period (controlled by `warmup_steps`) gradually increases the learning rate. This helps stabilize training in the early stages when weights are changing rapidly.
-    *   **Decay Phase**: After warmup, the learning rate typically decays (cosine decay in this script) over the `max_steps`. This allows for finer adjustments as the model converges.
-    *   **Setting `max_steps`**: Determine `max_steps` based on your dataset size and the number of epochs you want to train for (or total tokens you want the model to see). One epoch means the model has seen the entire dataset once.
-
-*   **Leveraging Gradient Accumulation**:
-    *   **Simulating Larger Batches**: If your per-GPU `batch_size` is limited by VRAM, `gradient_accumulation_steps` allows you to simulate a larger effective batch size (`batch_size * num_gpus * gradient_accumulation_steps`). This can improve training stability and performance.
-
-*   **Regular Checkpointing**:
-    *   **Don't Lose Progress**: For long training runs, frequent checkpointing (via `save_interval`) is crucial. It ensures that you can resume training with minimal loss of work in case of interruptions.
-
-*   **Evaluation Strategy**:
-    *   **Beyond Pre-training Loss**: While `train.py` focuses on minimizing the pre-training loss, the ultimate measure of a language model is its performance on downstream tasks.
-    *   **Held-out Sets**: Maintain held-out validation datasets (not seen during training) to periodically evaluate your model's generalization. Consider using academic benchmarks relevant to your goals.
-
-*   **Start Small, Iterate Fast**:
-    *   **Debug Pipeline First**: Before launching a multi-day or multi-week training run on a massive dataset with a large model, conduct smaller experiments. Use a fraction of your data and a smaller model to verify your data loading, tokenization, training loop, and logging are all working correctly. This can save significant time and resources.
+*   **Start Small, Iterate Fast:** Before committing to a multi-week run, validate your pipeline with a small model (`d_model=512`, `n_layers=8`, etc.) and a subset of data.
+*   **Monitor Expert Utilization:** Watch the `aux_loss` curve in W&B. If it spikes or plateaus high, reduce `aux_loss_weight` or check data quality.
+*   **Tune `aux_loss_weight` Carefully:** Too low → expert collapse. Too high → degraded language modeling performance. Typical values: `1e-3`–`1e-2`.
+*   **All other best practices** (data quality, tokenizer alignment, learning-rate tuning, checkpointing) remain identical to the original README.
 
 ---
 
 ## Limitations
 
-While Lunaris Codex is designed to be a robust toolkit for pre-training language models, it's important to understand its current scope and limitations:
-
-*   **Focus on Pre-training**:
-    *   Lunaris Codex is primarily engineered for pre-training large language models from scratch. Its core script (`train.py`) and design philosophy are centered around this goal.
-    *   The toolkit does not include built-in scripts or extensive, dedicated support for fine-tuning models on specific downstream tasks (e.g., instruction tuning, sequence classification, question answering). Users wishing to fine-tune the pre-trained models will need to adapt the model code or integrate it with other frameworks (like Hugging Face Transformers).
-
-*   **Data Preparation and Tokenization**:
-    *   The crucial steps of data sourcing, cleaning, extensive preprocessing (beyond basic tokenization), and training a tokenizer are external to the `train.py` script.
-    *   Users are responsible for these preliminary stages. The quality, diversity, and appropriateness of the data and tokenizer will significantly influence the final model's performance, and Lunaris Codex relies on the user to manage these aspects effectively.
-
-*   **Evaluation Beyond Pre-training Metrics**:
-    *   The `train.py` script provides essential training metrics such as loss and perplexity, which are vital for monitoring the pre-training process.
-    *   However, it does not have integrated evaluation pipelines for standard academic NLP benchmarks (e.g., GLUE, SuperGLUE, MMLU) or support for custom downstream task evaluation. Users will need to develop their own evaluation workflows to assess model performance beyond pre-training.
-
-*   **Resource Requirements**:
-    *   Training capable large language models is inherently computationally intensive. While Lunaris Codex is optimized for efficiency, pre-training still demands significant resources, including:
-        *   **High VRAM GPUs**: For larger models and batch sizes.
-        *   **Substantial Storage**: For datasets, tokenizers, and checkpoints.
-        *   **Considerable Training Time**: Potentially days or weeks, depending on the model scale and dataset size.
-    *   Users should be prepared for these hardware and time commitments when undertaking ambitious pre-training projects.
-
-*   **Advanced Parallelism and Features**:
-    *   Currently, Lunaris Codex supports Distributed Data Parallel (DDP) for multi-GPU training.
-    *   More advanced parallelism strategies (e.g., Fully Sharded Data Parallel - FSDP, Tensor Parallelism, Pipeline Parallelism) or features common in some large, established frameworks (like a dedicated model hub or extensive hyperparameter optimization suites) are not yet implemented. These could be areas for future development or community contributions.
+*   **Sparse Computation:** The current implementation uses a simple Python loop for token routing. While correct and readable, it is **not** optimized for maximum throughput. Future releases may include custom CUDA kernels or `torch.sparse` improvements.
+*   **Expert Count & Memory:** While FLOPs per forward pass stay constant, **total parameter count scales linearly** with `n_experts`. Ensure you have enough GPU memory and CPU RAM to hold all expert weights.
+*   **Fine-tuning & Downstream Tasks:** As with the base repository, fine-tuning scripts and built-in evaluation suites are not included. Users must adapt the pre-trained model to downstream tasks using external tooling.
+*   **Resource Requirements:** MoE models can be **larger in memory** than dense models of the same computational budget. Budget your GPUs and storage accordingly.
 
 ---
 
@@ -248,7 +188,6 @@ Developed by **Francisco Antonio** ([@MeryylleA](https://github.com/MeryylleA) o
 Join our community on Discord for discussions, help, and to share your results: [**Moon Cloud Services**](https://discord.gg/JNsfzEwMtC)
 
 ### Special Thanks
-*   To Andrej Karpathy for `nanoGPT`, which served as the inspirational and architectural starting point for this project.
-*   To the open-source AI community for their invaluable tools, research, and datasets.
-*   To **Google Gemini** for extensive pair-programming sessions, architectural discussions, debugging, and documentation assistance.
-*   To **Lambda Labs** for supporting this project with the large-scale compute necessary for this research.
+*   To Andrej Karpathy for `nanoGPT`.
+*   To the open-source AI community.
+*   To Google for the Switch Transformer paper and design principles.
