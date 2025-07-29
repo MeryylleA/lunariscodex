@@ -30,7 +30,7 @@ safetensors~=0.5
 # For configuration, progress bars, etc.
 PyYAML~=6.0
 tqdm~=4.67
-numpy~=2.1   # Usually a dependency of torch/datasets, but good to specify.
+numpy~=2.0   # Usually a dependency of torch/datasets, but good to specify.
 pandas~=2.3  # If used in any data analysis/prep scripts.
 
 # --- Experiment Tracking ---
