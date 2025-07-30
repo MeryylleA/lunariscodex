@@ -11,6 +11,8 @@ Key Changes:
   and the progress bar, which is critical for monitoring expert load balancing.
 - **Correct Perplexity Calculation**: Perplexity is now calculated *only* from the main
   cross-entropy loss, ignoring the auxiliary loss, which makes the metric meaningful.
+- **Expert Utilization Logging**: Captures expert routing decisions and logs a bar chart
+  to W&B to visualize token distribution across experts.
 """
 
 import os
@@ -234,6 +236,7 @@ def train(config_path: str):
         accumulated_loss = 0.0
         accumulated_main_loss = 0.0
         accumulated_aux_loss = 0.0
+        expert_indices_list = None # Garante que a variável exista fora do loop.
 
         for micro_step in range(config.gradient_accumulation_steps):
             is_last_micro_step = (micro_step == config.gradient_accumulation_steps - 1)
@@ -253,9 +256,8 @@ def train(config_path: str):
                 with ctx:
                     # --- MODIFICAÇÃO MoE ---
                     # Desagregamos a tupla de losses retornada pelo modelo.
-                    # loss: loss total para o backpropagation.
-                    # main_loss, aux_loss: componentes para logging.
-                    logits, (loss, main_loss, aux_loss), _ = model(x, targets=y, past_key_values=None)
+                    # A quarta variável, expert_indices_list, é capturada para logging.
+                    logits, (loss, main_loss, aux_loss), _, expert_indices_list = model(x, targets=y, past_key_values=None)
                     loss = loss / config.gradient_accumulation_steps
 
                 # Acumulamos cada componente separadamente.
@@ -295,8 +297,8 @@ def train(config_path: str):
 
                 if config.wandb_project:
                     # --- MODIFICAÇÃO MoE ---
-                    # Logamos as losses separadas no W&B para melhor visualização.
-                    wandb.log({
+                    # Criamos um único dicionário para todos os logs do W&B.
+                    log_data = {
                         "step": current_step,
                         "epoch": current_epoch,
                         "loss/total": accumulated_loss,
@@ -305,7 +307,29 @@ def train(config_path: str):
                         "perplexity": perplexity,
                         "lr": lr,
                         "grad_norm": grad_norm.item(),
-                    })
+                    }
+
+                    # Verificamos se temos dados de roteamento de experts para logar.
+                    if expert_indices_list:
+                        # Pegamos os índices da primeira camada MoE para visualização.
+                        first_moe_layer_indices = expert_indices_list[0].detach().cpu()
+
+                        # Contamos quantos tokens foram para cada expert.
+                        num_experts = raw_model.config.n_experts
+                        expert_counts = torch.bincount(first_moe_layer_indices.view(-1), minlength=num_experts)
+
+                        # Criamos uma tabela W&B para o gráfico de barras.
+                        table = wandb.Table(columns=["Expert ID", "Token Count"])
+                        for i in range(num_experts):
+                            table.add_data(f"Expert {i}", expert_counts[i].item())
+
+                        # Adicionamos o gráfico de barras ao nosso dicionário de logs.
+                        log_data["expert_utilization/layer_0"] = wandb.plot.bar(
+                            table, "Expert ID", "Token Count", title="Expert Utilization (Layer 0)"
+                        )
+
+                    # Logamos tudo de uma vez.
+                    wandb.log(log_data)
 
             if current_step > 0 and current_step % config.save_interval == 0:
                 checkpoint = {
