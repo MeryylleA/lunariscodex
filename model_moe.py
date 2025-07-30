@@ -4,7 +4,6 @@ This version is a refactored and simplified Llama-style model, created by adapti
 the robust, industry-standard components from the `Instella` (OLMo) architecture
 into a clean, minimal, and self-contained structure.
 
---- MODIFICATION FOR MOE EXPERIMENT ---
 This version has been adapted to include a Mixture-of-Experts (MoE) layer,
 specifically following the principles of the Switch Transformer (k=1 routing).
 The standard FeedForward network inside each Transformer Block is replaced by a
@@ -26,6 +25,7 @@ from typing import Optional, Tuple, List
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 @dataclass
@@ -264,7 +264,7 @@ class MixtureOfExperts(nn.Module):
         return final_output, aux_loss, expert_indices_reshaped
 
 
-# --- MODIFIED: Block to support MoE ---
+# --- MODIFIED: Block to support MoE and Gradient Checkpointing ---
 class Block(nn.Module):
     """
     A single Transformer block, now with a choice between a standard FFN and an MoE layer.
@@ -296,30 +296,45 @@ class Block(nn.Module):
         past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
-        Forward pass of the transformer block. Now returns an optional auxiliary loss and expert indices.
+        Forward pass of the transformer block. Now uses activation checkpointing to save memory during training.
         """
-        # First residual connection: Attention
-        attn_output, new_kv = self.attention(self.attention_norm(x), freqs_cis, past_kv)
-        h = x + attn_output
+        def _inner_forward(
+            x_inner: torch.Tensor,
+            freqs_cis_inner: torch.Tensor,
+            past_kv_inner: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        ):
+            # First residual connection: Attention
+            attn_output, new_kv = self.attention(self.attention_norm(x_inner), freqs_cis_inner, past_kv_inner)
+            h = x_inner + attn_output
 
-        # Prepare for the second residual connection (FFN or MoE)
-        aux_loss = None
-        expert_indices = None
-        ffn_input = self.ffn_norm(h)
+            # Prepare for the second residual connection (FFN or MoE)
+            aux_loss = None
+            expert_indices = None
+            ffn_input = self.ffn_norm(h)
 
-        # Apply either the FFN or the MoE layer.
-        if self.is_moe:
-            # If it's an MoE layer, it returns the output, auxiliary loss, and expert indices.
-            ffn_output, aux_loss, expert_indices = self.feed_forward(ffn_input)
+            # Apply either the FFN or the MoE layer.
+            if self.is_moe:
+                # If it's an MoE layer, it returns the output, auxiliary loss, and expert indices.
+                ffn_output, aux_loss, expert_indices = self.feed_forward(ffn_input)
+            else:
+                # A standard FFN just returns the output.
+                ffn_output = self.feed_forward(ffn_input)
+
+            # Second residual connection
+            out = h + ffn_output
+
+            # The block now propagates the auxiliary loss and expert indices upwards.
+            return out, new_kv, aux_loss, expert_indices
+
+        if self.training:
+            # During training, use checkpointing to save memory.
+            # `use_reentrant=False` is recommended for better performance and compatibility.
+            return checkpoint(
+                _inner_forward, x, freqs_cis, past_kv, use_reentrant=False
+            )
         else:
-            # A standard FFN just returns the output.
-            ffn_output = self.feed_forward(ffn_input)
-
-        # Second residual connection
-        out = h + ffn_output
-
-        # The block now propagates the auxiliary loss and expert indices upwards.
-        return out, new_kv, aux_loss, expert_indices
+            # During evaluation, run the forward pass directly.
+            return _inner_forward(x, freqs_cis, past_kv)
 
 
 # --- MODIFIED: Main LunarisCodex class to handle auxiliary loss ---
