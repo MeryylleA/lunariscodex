@@ -189,7 +189,7 @@ class MixtureOfExperts(nn.Module):
         # This controls how much we penalize unbalanced expert utilization.
         self.aux_loss_weight = config.aux_loss_weight
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass for the MoE layer.
 
@@ -258,7 +258,10 @@ class MixtureOfExperts(nn.Module):
         final_output = final_output * top_expert_probs.unsqueeze(-1)
         final_output = final_output.view(batch_size, seq_len, d_model)
 
-        return final_output, aux_loss
+        # Reshape expert_indices back to (batch_size, seq_len) for tracking
+        expert_indices_reshaped = expert_indices.view(batch_size, seq_len)
+
+        return final_output, aux_loss, expert_indices_reshaped
 
 
 # --- MODIFIED: Block to support MoE ---
@@ -291,9 +294,9 @@ class Block(nn.Module):
         x: torch.Tensor,
         freqs_cis: torch.Tensor,
         past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor], Optional[torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
-        Forward pass of the transformer block. Now returns an optional auxiliary loss.
+        Forward pass of the transformer block. Now returns an optional auxiliary loss and expert indices.
         """
         # First residual connection: Attention
         attn_output, new_kv = self.attention(self.attention_norm(x), freqs_cis, past_kv)
@@ -301,12 +304,13 @@ class Block(nn.Module):
 
         # Prepare for the second residual connection (FFN or MoE)
         aux_loss = None
+        expert_indices = None
         ffn_input = self.ffn_norm(h)
 
         # Apply either the FFN or the MoE layer.
         if self.is_moe:
-            # If it's an MoE layer, it returns the output and an auxiliary loss.
-            ffn_output, aux_loss = self.feed_forward(ffn_input)
+            # If it's an MoE layer, it returns the output, auxiliary loss, and expert indices.
+            ffn_output, aux_loss, expert_indices = self.feed_forward(ffn_input)
         else:
             # A standard FFN just returns the output.
             ffn_output = self.feed_forward(ffn_input)
@@ -314,8 +318,8 @@ class Block(nn.Module):
         # Second residual connection
         out = h + ffn_output
 
-        # The block now propagates the auxiliary loss upwards.
-        return out, new_kv, aux_loss
+        # The block now propagates the auxiliary loss and expert indices upwards.
+        return out, new_kv, aux_loss, expert_indices
 
 
 # --- MODIFIED: Main LunarisCodex class to handle auxiliary loss ---
@@ -376,7 +380,7 @@ class LunarisCodex(nn.Module):
         idx: torch.Tensor,
         targets: Optional[torch.Tensor] = None,
         past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
-    ) -> Tuple[torch.Tensor, Optional[tuple], List[Tuple[torch.Tensor, torch.Tensor]]]:
+    ) -> Tuple[torch.Tensor, Optional[tuple], List[Tuple[torch.Tensor, torch.Tensor]], Optional[List[torch.Tensor]]]:
         """
         Forward pass of the model.
 
@@ -398,6 +402,7 @@ class LunarisCodex(nn.Module):
             - logits: The model's output logits.
             - loss: A tuple `(total, main, aux)` during training, or `None` during inference.
             - new_past_key_values: The updated KV cache.
+            - expert_indices_list: List of expert indices from each MoE layer during training, or `None` during inference.
         """
         B, T = idx.shape
         start_pos = past_key_values[0][0].shape[-2] if past_key_values is not None else 0
@@ -411,13 +416,17 @@ class LunarisCodex(nn.Module):
         new_past_key_values = []
         # Accumulate the auxiliary loss from all MoE layers.
         total_aux_loss = 0.0
+        # Create list to collect expert indices from MoE layers
+        expert_indices_list = []
 
         for i, block in enumerate(self.transformer.h):
             past_kv_for_block = past_key_values[i] if past_key_values is not None else None
-            # The block returns an optional auxiliary loss.
-            x, new_kv, aux_loss = block(x, freqs_cis, past_kv_for_block)
+            # The block returns an optional auxiliary loss and expert indices.
+            x, new_kv, aux_loss, expert_indices = block(x, freqs_cis, past_kv_for_block)
             if aux_loss is not None:
                 total_aux_loss += aux_loss
+            if expert_indices is not None:
+                expert_indices_list.append(expert_indices)
             new_past_key_values.append(new_kv)
 
         x = self.transformer.ln_f(x)
@@ -448,13 +457,14 @@ class LunarisCodex(nn.Module):
             # load balancing behavior (final_aux_loss).
             loss = (total_loss, main_loss, final_aux_loss)
 
+            # Return expert indices during training
+            return logits, loss, new_past_key_values, expert_indices_list
+
         else: # Inference mode
             logits = self.lm_head(x[:, [-1], :])
-            # During inference, we don't calculate the loss. 'loss' remains None.
+            # During inference, we don't calculate the loss or return expert indices.
             loss = None
-
-        # Return logits, the loss tuple (or None), and the updated key-value cache.
-        return logits, loss, new_past_key_values
+            return logits, loss, new_past_key_values, None
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
@@ -483,7 +493,7 @@ class LunarisCodex(nn.Module):
             if current_len >= self.config.max_seq_len:
                 break
             idx_cond = idx if past_key_values is None else idx[:, -1:]
-            logits, _, past_key_values = self(idx_cond, past_key_values=past_key_values)
+            logits, _, past_key_values, _ = self(idx_cond, past_key_values=past_key_values)
             logits = logits[:, -1, :] / temperature
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
