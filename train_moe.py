@@ -1,18 +1,19 @@
 """
-Main Training Script for the LunarisCodex Language Model
+Main Training Script for the LunarisCodex Language Model (MoE Version).
 
---- VERSION FOR MOE EXPERIMENT ---
 This script is adapted to train the Mixture-of-Experts (MoE) version of the model.
+It handles the specific requirements of MoE training, such as the auxiliary load
+balancing loss and logging expert utilization.
 
-Key Changes:
-- **Imports from `model_moe.py`**: Ensures the MoE architecture is used.
-- **Separate Loss Logging**: The training loop now expects the model to return a tuple
-  of losses (total, main, auxiliary). It logs these components separately to Weights & Biases
-  and the progress bar, which is critical for monitoring expert load balancing.
-- **Correct Perplexity Calculation**: Perplexity is now calculated *only* from the main
-  cross-entropy loss, ignoring the auxiliary loss, which makes the metric meaningful.
-- **Expert Utilization Logging**: Captures expert routing decisions and logs a bar chart
-  to W&B to visualize token distribution across experts.
+The training loop is designed to unpack the model's output, which includes the
+total loss, the main cross-entropy loss, and the auxiliary loss. These components
+are logged separately to monitor both model performance and expert load balancing,
+which is a critical aspect of stable MoE training.
+
+Perplexity is calculated using only the main cross-entropy loss to ensure a
+meaningful measure of the model's predictive performance. Additionally, the script
+captures expert routing decisions and logs a utilization bar chart to Weights & Biases
+to provide a clear visualization of how tokens are distributed across experts.
 """
 
 import os
@@ -31,12 +32,11 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group, get_rank, get_world_size
 from tqdm import tqdm
 
-# --- MODIFICAÇÃO MoE ---
-# Importamos a partir do nosso novo arquivo de modelo com suporte a MoE.
+# Import the MoE-enabled model and configuration from the corresponding model file.
 from model_moe import LunarisCodex, LunarisCodexConfig
 
-# A classe TrainConfig não precisa de alterações, pois o from_yaml já carregará
-# os novos parâmetros do MoE se eles estiverem no arquivo de configuração.
+# The TrainConfig class itself requires no major changes, as the `from_yaml`
+# classmethod will automatically load MoE parameters if they are present in the YAML file.
 @dataclass
 class TrainConfig:
     model: LunarisCodexConfig = field(default_factory=LunarisCodexConfig)
@@ -56,7 +56,7 @@ class TrainConfig:
     out_dir: str = "checkpoints"
     log_interval: int = 20
     save_interval: int = 1000
-    wandb_project: Optional[str] = "lunaris-codex-moe" # Projeto W&B sugerido para o experimento
+    wandb_project: Optional[str] = "lunaris-codex-moe" # Suggested W&B project for the MoE experiment
     wandb_entity: Optional[str] = None
     wandb_run_name: Optional[str] = f"run-moe-{time.strftime('%Y-%m-%d-%H-%M')}"
 
@@ -72,7 +72,7 @@ class TrainConfig:
         model_config = LunarisCodexConfig(**model_config_dict)
         config_dict['model'] = model_config
         float_fields = ['learning_rate', 'weight_decay', 'beta1', 'beta2', 'grad_clip']
-        if 'aux_loss_weight' not in model_config_dict: # Adiciona o default se não estiver no yaml
+        if 'aux_loss_weight' not in model_config_dict: # Add the default value if it's missing from the yaml
              model_config.aux_loss_weight = 1e-2
         int_fields = ['warmup_steps', 'max_steps', 'batch_size', 'gradient_accumulation_steps', 'num_epochs', 'save_interval', 'log_interval']
         for key in float_fields:
@@ -83,7 +83,7 @@ class TrainConfig:
                 config_dict[key] = int(config_dict[key])
         return cls(**config_dict)
 
-# O Dataset e outras funções utilitárias permanecem os mesmos.
+# The Dataset and other utility functions remain the same.
 class ShardDataset(Dataset):
     def __init__(self, data_dir: str, sequence_length: int):
         super().__init__()
@@ -231,15 +231,18 @@ def train(config_path: str):
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
-        # --- MODIFICAÇÃO MoE ---
-        # Inicializamos acumuladores para cada componente da loss.
+        # Initialize accumulators for the different loss components.
+        # This is necessary for accurate logging across gradient accumulation steps.
         accumulated_loss = 0.0
         accumulated_main_loss = 0.0
         accumulated_aux_loss = 0.0
-        expert_indices_list = None # Garante que a variável exista fora do loop.
+        expert_indices_list = None # Ensure the variable exists outside the loop.
 
         for micro_step in range(config.gradient_accumulation_steps):
             is_last_micro_step = (micro_step == config.gradient_accumulation_steps - 1)
+            # When using DDP with gradient accumulation, we only want to sync gradients
+            # on the final micro-step. `model.no_sync()` prevents DDP from reducing
+            # gradients across processes on all but the last micro-step.
             ddp_context = model.no_sync() if is_ddp and not is_last_micro_step else nullcontext()
 
             with ddp_context:
@@ -254,17 +257,20 @@ def train(config_path: str):
                 x, y = x.to(config.device, non_blocking=True), y.to(config.device, non_blocking=True)
 
                 with ctx:
-                    # --- MODIFICAÇÃO MoE ---
-                    # Desagregamos a tupla de losses retornada pelo modelo.
-                    # A quarta variável, expert_indices_list, é capturada para logging.
+                    # The MoE model returns a tuple for loss: (total_loss, main_loss, aux_loss).
+                    # We unpack it here. The `expert_indices_list` is also captured for logging.
                     logits, (loss, main_loss, aux_loss), _, expert_indices_list = model(x, targets=y, past_key_values=None)
+                    # Scale the loss to account for gradient accumulation.
                     loss = loss / config.gradient_accumulation_steps
 
-                # Acumulamos cada componente separadamente.
+                # Accumulate each loss component separately for accurate logging.
                 accumulated_loss += loss.item()
                 if main_loss is not None:
+                    # The main_loss is the raw cross-entropy loss for this micro-batch.
+                    # We scale it by the number of accumulation steps before adding it to the accumulator.
                     accumulated_main_loss += main_loss.item() / config.gradient_accumulation_steps
                 if aux_loss is not None:
+                    # The same applies to the auxiliary loss.
                     accumulated_aux_loss += aux_loss.item() / config.gradient_accumulation_steps
 
                 loss.backward()
@@ -276,15 +282,15 @@ def train(config_path: str):
         if is_master_process:
             pbar.update(1)
             if current_step % config.log_interval == 0:
-                # --- MODIFICAÇÃO MoE ---
-                # A perplexidade é calculada APENAS com a main_loss (cross-entropy).
+                # Perplexity is calculated only from the main cross-entropy loss, as the
+                # auxiliary loss is for regularization and not a measure of predictive performance.
                 log_loss_main = accumulated_main_loss
                 try:
                     perplexity = math.exp(log_loss_main)
                 except (OverflowError, ValueError):
                     perplexity = float('inf')
 
-                # Logamos as losses separadas na barra de progresso.
+                # Log the separate loss components to the progress bar for real-time monitoring.
                 postfix_data = {
                     "loss": f"{accumulated_loss:.3f}",
                     "loss_main": f"{log_loss_main:.3f}",
@@ -296,8 +302,7 @@ def train(config_path: str):
                 pbar.set_postfix(postfix_data)
 
                 if config.wandb_project:
-                    # --- MODIFICAÇÃO MoE ---
-                    # Criamos um único dicionário para todos os logs do W&B.
+                    # Create a single dictionary for all W&B logs for this step.
                     log_data = {
                         "step": current_step,
                         "epoch": current_epoch,
@@ -309,26 +314,26 @@ def train(config_path: str):
                         "grad_norm": grad_norm.item(),
                     }
 
-                    # Verificamos se temos dados de roteamento de experts para logar.
+                    # Check if expert routing data is available for logging.
                     if expert_indices_list:
-                        # Pegamos os índices da primeira camada MoE para visualização.
+                        # For visualization, we'll focus on the expert choices in the first MoE layer.
                         first_moe_layer_indices = expert_indices_list[0].detach().cpu()
 
-                        # Contamos quantos tokens foram para cada expert.
+                        # Count the number of tokens routed to each expert.
                         num_experts = raw_model.config.n_experts
                         expert_counts = torch.bincount(first_moe_layer_indices.view(-1), minlength=num_experts)
 
-                        # Criamos uma tabela W&B para o gráfico de barras.
+                        # Create a wandb.Table to be plotted as a bar chart.
                         table = wandb.Table(columns=["Expert ID", "Token Count"])
                         for i in range(num_experts):
                             table.add_data(f"Expert {i}", expert_counts[i].item())
 
-                        # Adicionamos o gráfico de barras ao nosso dicionário de logs.
+                        # Add the bar chart plot to our logging dictionary.
                         log_data["expert_utilization/layer_0"] = wandb.plot.bar(
                             table, "Expert ID", "Token Count", title="Expert Utilization (Layer 0)"
                         )
 
-                    # Logamos tudo de uma vez.
+                    # Log all metrics for this step to W&B at once.
                     wandb.log(log_data)
 
             if current_step > 0 and current_step % config.save_interval == 0:
