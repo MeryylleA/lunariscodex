@@ -183,23 +183,6 @@ For single-GPU or single-node multi-GPU training, use the standard DDP-based scr
 # Single-GPU or single-node multi-GPU (DDP)
 torchrun --standalone --nproc_per_node=auto train_nsa.py train_config_nsa.yaml
 ```
-
-##### For Large-Scale Training (FSDP):
-For large multi-GPU or multi-node training, the `train_nsa_fsdp.py` script is strongly recommended for its memory efficiency. The launch command is more involved and depends on your cluster environment (e.g., Slurm, OpenMPI).
-
-```bash
-# Example for multi-node FSDP training (adjust for your cluster)
-torchrun \
-    --nproc_per_node=8 \
-    --nnodes=4 \
-    --node_rank=$SLURM_NODEID \
-    --rdzv_id=$SLURM_JOB_ID \
-    --rdzv_backend=c10d \
-    --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
-    train_nsa_fsdp.py train_config_nsa.yaml
-```
-> **Note:** The FSDP launch command is a template. You must adapt variables like `--nnodes`, `--node_rank`, `--rdzv_id`, and `--rdzv_endpoint` to match the environment variables provided by your specific cluster's job scheduler.
-
 ---
 
 ## Best Practices for Pre-training
