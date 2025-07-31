@@ -90,10 +90,12 @@ class Attention(nn.Module):
         self.n_heads = config.n_heads
         self.n_kv_heads = config.n_kv_heads
         self.head_dim = config.d_model // config.n_heads
-        self.q_proj = nn.Linear(config.d_model, config.n_heads * self.head_dim, bias=False)
-        self.k_proj = nn.Linear(config.d_model, config.n_kv_heads * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(config.d_model, config.n_kv_heads * self.head_dim, bias=False)
-        self.o_proj = nn.Linear(config.n_heads * self.head_dim, config.d_model, bias=False)
+        
+        q_size = self.n_heads * self.head_dim
+        kv_size = self.n_kv_heads * self.head_dim
+        
+        self.wqkv = nn.Linear(config.d_model, q_size + 2 * kv_size, bias=False)
+        self.o_proj = nn.Linear(q_size, config.d_model, bias=False)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(
@@ -103,26 +105,33 @@ class Attention(nn.Module):
         past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         B, T, C = x.shape
-        q = self.q_proj(x)
-        k = self.k_proj(x)
-        v = self.v_proj(x)
+        
+        qkv = self.wqkv(x)
+        q, k, v = torch.split(qkv, [self.n_heads * self.head_dim, self.n_kv_heads * self.head_dim, self.n_kv_heads * self.head_dim], dim=-1)
+
         q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
         k = k.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
+        
         q, k = apply_rotary_emb(q, k, freqs_cis)
+        
         if past_kv is not None:
             past_k, past_v = past_kv
             k = torch.cat((past_k, k), dim=-2)
             v = torch.cat((past_v, v), dim=-2)
+        
         present_kv = (k, v)
+        
         if self.n_kv_heads < self.n_heads:
             n_repeats = self.n_heads // self.n_kv_heads
             k = k.repeat_interleave(n_repeats, dim=1)
             v = v.repeat_interleave(n_repeats, dim=1)
+            
         is_causal = past_kv is None
         y = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.dropout(self.o_proj(y))
+        
         return y, present_kv
 
 # The original FeedForward class is kept, as it will be used as the "expert" network.
@@ -132,13 +141,14 @@ class FeedForward(nn.Module):
         hidden_dim = int(config.ffn_hidden_multiplier * config.d_model)
         hidden_dim = int(2 * hidden_dim / 3)
         hidden_dim = config.multiple_of * ((hidden_dim + config.multiple_of - 1) // config.multiple_of)
-        self.w1 = nn.Linear(config.d_model, hidden_dim, bias=False)
-        self.w3 = nn.Linear(config.d_model, hidden_dim, bias=False)
+        
+        self.w13 = nn.Linear(config.d_model, 2 * hidden_dim, bias=False)
         self.w2 = nn.Linear(hidden_dim, config.d_model, bias=False)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor):
-        swiglu = F.silu(self.w1(x)) * self.w3(x)
+        gate, up = self.w13(x).chunk(2, dim=-1)
+        swiglu = F.silu(gate) * up
         return self.dropout(self.w2(swiglu))
 
 # --- NEW: Mixture-of-Experts Layer ---
