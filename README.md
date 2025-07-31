@@ -1,15 +1,15 @@
 # Lunaris Codex
 
-> **Note:** You are viewing an **experimental branch** of Lunaris Codex.  
-> This version introduces a **Mixture-of-Experts (MoE) layer** in the style of the **Switch Transformer (k=1)**.  
-> All MoE-related code lives in `model_moe.py` and is trained with `train_moe.py` or the new `train_moe_fsdp.py` for large-scale jobs.  
+> **Note:** You are viewing the **`nsa-experiment` branch** of Lunaris Codex.  
+> This version introduces **Native Sparse Attention (NSA)** on top of the **Mixture-of-Experts (MoE) layer**.  
+> All related code lives in `model_nsa_moe.py` and is trained with `train_nsa.py` or `train_nsa_fsdp.py`.  
 > These features are under active evaluation—expect breaking changes and rapid iteration.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/discord/1138864753915854898?label=Discord&logo=discord&color=7289DA)](https://discord.gg/JNsfzEwMtC)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MeryylleA/lunariscodex)
 
-A Note on Our Foundation: The architectural foundation of Lunaris Codex is proudly built upon Andrej Karpathy's nanoGPT. We chose nanoGPT for its brilliant simplicity and clarity, which aligns perfectly with our philosophy of providing a "hackable" and understandable base. This version, however, represents a significant evolution, integrating modern enhancements like **RoPE, Grouped Query Attention (GQA), Fused SwiGLU, QK-Reorder-LN, Gradient Checkpointing**, and now **Mixture-of-Experts (MoE)** to push performance and capabilities far beyond the original.
+A Note on Our Foundation: The architectural foundation of Lunaris Codex is proudly built upon Andrej Karpathy's nanoGPT. We chose nanoGPT for its brilliant simplicity and clarity, which aligns perfectly with our philosophy of providing a "hackable" and understandable base. This version, however, represents a significant evolution, integrating modern enhancements like **RoPE, Grouped Query Attention (GQA), Fused SwiGLU, Native Sparse Attention (NSA), Gradient Checkpointing**, and **Mixture-of-Experts (MoE)** to push performance and capabilities far beyond the original.
 
 **Lunaris Codex** is a streamlined, high-performance toolkit for pre-training powerful language models from scratch. This project provides a modern, Llama-style Transformer architecture and a robust, heavily optimized training script, designed for stability and maximum throughput.
 
@@ -24,9 +24,9 @@ Lunaris Codex is engineered for a balance of performance and clarity. Its archit
 
 | Component | Implementation | Benefits & Considerations |
 | :--- | :--- | :--- |
-| **Structure / Normalization** | **QK-Reorder-LN Decoder-Only Transformer** | This advanced scheme, inspired by the EXAONE 4.0 paper, removes the standard pre-attention normalization and instead normalizes the Q and K tensors individually within the attention mechanism to improve training stability and downstream performance. ([https://arxiv.org/abs/2507.11407](https://arxiv.org/abs/2507.11407)) |
-| **Positional Info**| **RoPE (Rotary Positional Embeddings)** | Injects relative positional information, leading to excellent generalization across various sequence lengths. Achieved without any learned parameters, making it efficient. |
-| **Attention** | **Grouped Query Attention (GQA) with Fused Layers** | Drastically reduces the memory usage of the KV cache during inference by sharing Key/Value heads across groups of Query heads. To maximize throughput, the Q, K, and V projection layers are fused into a single linear operation, reducing GPU kernel overhead and improving computational speed. |
+| **Structure / Normalization** | **Pre-Norm Transformer with `RMSNorm`** | Each Transformer block follows a `Norm -> Attention -> Add -> Norm -> FFN/MoE -> Add` structure. This pre-normalization scheme is a standard, robust design that promotes stable training for deep architectures. |
+| **Positional Info**| **RoPE (Rotary Positional Embeddings)** | Injects relative positional information, leading to excellent generalization across various sequence lengths. Achieved without any learned parameters, making it efficient. Handled internally by the NSA module. |
+| **Attention** | **Native Sparse Attention (NSA)** | **Benefits:** Enables efficient training and inference on very long sequences by breaking the O(n²) complexity of standard attention. It uses a three-pathway system: coarse-grained token compression (global view), fine-grained token selection (focused view), and a sliding window (local view). **Considerations:** It is natively trainable from scratch, unlike many other sparse attention methods that are inference-only. Relies on custom Triton/CUDA kernels. ([https://arxiv.org/abs/2502.11089](https://arxiv.org/abs/2502.11089)) |
 | **FFN Activation**| **Fused SwiGLU** | Offers improved performance over traditional activations like ReLU. Our implementation fuses the two linear projections (for the gate and the value) into a single, wider layer. This minimizes memory access latency and significantly boosts performance over a non-fused approach. |
 | **Mixture-of-Experts (MoE)** | **Switch-style (k=1) Router + Expert FFNs** | **Benefits:** Achieves a much larger effective parameter count **without** increasing computation per forward pass. Each token is routed to exactly **one** expert (k=1), keeping FLOPs constant while unlocking model capacity. **Considerations:** Requires an auxiliary load-balancing loss to prevent expert collapse and ensure uniform utilization. |
 | **Training** | **Gradient Checkpointing** | Massively reduces VRAM usage during training by recomputing activations during the backward pass instead of storing them. This allows for training larger models or using larger batch sizes, at the cost of a small compute overhead. |
@@ -38,8 +38,8 @@ Lunaris Codex is engineered for a balance of performance and clarity. Its archit
 ## The Training Pipeline
 
 Our training infrastructure is designed to be both accessible for smaller experiments and powerful enough for large-scale pre-training. We now provide **two** distinct training scripts:
-*   `train_moe.py`: A robust script for single-node training using `DistributedDataParallel` (DDP). Perfect for getting started or for training on a single machine with multiple GPUs.
-*   `train_moe_fsdp.py`: A highly optimized script for large-scale, multi-node training using `FullyShardedDataParallel` (FSDP).
+*   `train_nsa.py`: A robust script for single-node training using `DistributedDataParallel` (DDP). Perfect for getting started or for training on a single machine with multiple GPUs.
+*   `train_nsa_fsdp.py`: A highly optimized script for large-scale, multi-node training using `FullyShardedDataParallel` (FSDP).
 
 Both scripts are feature-rich and resilient, meticulously engineered to handle long-running jobs with stability and efficiency.
 
@@ -48,8 +48,8 @@ Both scripts are feature-rich and resilient, meticulously engineered to handle l
 *   **High-Performance Training:**
     *   **Mixed-Precision:** Full support for `bfloat16` (preferred on compatible hardware) and `fp16` to accelerate training and reduce memory footprint.
     *   **`torch.compile`:** Integrates `torch.compile` for graph optimization, potentially speeding up model execution.
-    *   **Distributed Training (`DDP`):** The `train_moe.py` script leverages PyTorch's `DistributedDataParallel` (DDP) for efficient multi-GPU training on a single node.
-    *   **FSDP (Fully Sharded Data Parallel):** The `train_moe_fsdp.py` script dramatically reduces memory usage on each GPU by sharding model parameters, gradients, and optimizer states across all available devices (ZeRO-3 style). This is essential for training extremely large models.
+    *   **Distributed Training (`DDP`):** The `train_nsa.py` script leverages PyTorch's `DistributedDataParallel` (DDP) for efficient multi-GPU training on a single node.
+    *   **FSDP (Fully Sharded Data Parallel):** The `train_nsa_fsdp.py` script dramatically reduces memory usage on each GPU by sharding model parameters, gradients, and optimizer states across all available devices (ZeRO-3 style). This is essential for training extremely large models.
     *   **AdamW Optimizer:** Utilizes the AdamW optimizer, a standard choice for robust language model training.
     *   **Gradient Accumulation:** Allows for larger effective batch sizes by accumulating gradients over multiple steps.
     *   **Gradient Clipping:** Implements gradient clipping to prevent exploding gradients and stabilize training.
@@ -69,7 +69,7 @@ To prevent this, we add an **auxiliary loss** (`aux_loss`) that encourages unifo
 While the `aux_loss` metric is a good numerical indicator of load balancing, a direct visual inspection provides much clearer and more actionable insight into expert health.
 
 #### Expert Utilization Chart
-To provide deeper insight beyond the `aux_loss` metric, the `train_moe.py` script now logs an interactive bar chart to Weights & Biases. This chart displays the exact number of tokens processed by each expert in real-time, making it trivial to spot imbalances or "dead" experts (experts that are not receiving any tokens). This direct feedback is invaluable for diagnosing routing issues and tuning the `aux_loss_weight` hyperparameter.
+To provide deeper insight beyond the `aux_loss` metric, the `train_nsa.py` script now logs an interactive bar chart to Weights & Biases. This chart displays the exact number of tokens processed by each expert in real-time, making it trivial to spot imbalances or "dead" experts (experts that are not receiving any tokens). This direct feedback is invaluable for diagnosing routing issues and tuning the `aux_loss_weight` hyperparameter.
 
 ---
 
@@ -108,22 +108,29 @@ This is where Lunaris Codex shines. Follow these steps to launch your training r
 git clone https://github.com/MeryylleA/lunariscodex.git
 cd lunariscodex
 
-# IMPORTANT: Switch to the MoE experimental branch
-git checkout moe-experiment
+# IMPORTANT: Switch to the NSA experimental branch
+git checkout nsa-experiment
 
 # Create and activate a virtual environment (recommended)
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies
+# Install Native Sparse Attention and its dependencies
+git clone https://github.com/fla-org/native-sparse-attention.git
+cd native-sparse-attention
+git submodule update --init --recursive
+pip install .
+cd .. # Go back to the lunariscodex root
+
+# Install remaining dependencies (ensure einops is included)
 pip install -r requirements.txt
 ```
 
 **2. Configure Your Training Run:**
-Create a `train_config_moe.yaml` file. This is where you define your model architecture, hyperparameters, and data paths. Below is a well-commented example configuration that shows how to use the new MoE features.
+Create a `train_config_nsa.yaml` file. This is where you define your model architecture, hyperparameters, and data paths. Below is a well-commented example configuration that shows how to use the new NSA and MoE features.
 
 ```yaml
-# train_config_moe.yaml
+# train_config_nsa.yaml
 
 # --- Model Configuration ---
 model:
@@ -132,13 +139,17 @@ model:
   n_layers: 20
   n_heads: 16
   n_kv_heads: 4              # Enable GQA: n_heads must be divisible by n_kv_heads
-  max_seq_len: 1024
-  dropout: 0.0
+  max_seq_len: 4096           # NSA allows for much longer sequences
 
   # --- MoE-specific settings ---
   n_experts: 8               # Number of expert FFNs in each MoE layer
   n_experts_per_token: 1     # Switch-style routing: 1 expert per token
   aux_loss_weight: 0.01      # Weight for the load-balancing auxiliary loss
+
+  # --- NSA-specific settings ---
+  block_size: 64             # Block size for compression/selection
+  block_counts: 16           # Number of selected blocks
+  window_size: 512           # Sliding window size for local attention
 
 # --- Data Configuration ---
 data_dir: "path/to/your/npy_shards/"
@@ -150,19 +161,19 @@ warmup_steps: 2000
 max_steps: 200000
 
 # --- Training ---
-batch_size: 32
-gradient_accumulation_steps: 4
+batch_size: 16               # Adjust based on sequence length and VRAM
+gradient_accumulation_steps: 8
 grad_clip: 1.0
 compile_model: true
 
 # --- I/O & Logging ---
-out_dir: "checkpoints/lunaris-moe"
+out_dir: "checkpoints/lunaris-nsa-moe"
 save_interval: 1000
 log_interval: 20
 
 # --- Weights & Biases (optional) ---
-wandb_project: "lunaris-codex-moe"
-wandb_run_name: "moe-8ex-gqa-20L"
+wandb_project: "lunaris-codex-nsa-moe"
+wandb_run_name: "nsa-moe-8ex-20L-4k"
 ```
 
 **3. Launch the Training!**
@@ -170,11 +181,11 @@ wandb_run_name: "moe-8ex-gqa-20L"
 For single-GPU or single-node multi-GPU training, use the standard DDP-based script:
 ```bash
 # Single-GPU or single-node multi-GPU (DDP)
-torchrun --standalone --nproc_per_node=auto train_moe.py train_config_moe.yaml
+torchrun --standalone --nproc_per_node=auto train_nsa.py train_config_nsa.yaml
 ```
 
 ##### For Large-Scale Training (FSDP):
-For large multi-GPU or multi-node training, the `train_moe_fsdp.py` script is strongly recommended for its memory efficiency. The launch command is more involved and depends on your cluster environment (e.g., Slurm, OpenMPI).
+For large multi-GPU or multi-node training, the `train_nsa_fsdp.py` script is strongly recommended for its memory efficiency. The launch command is more involved and depends on your cluster environment (e.g., Slurm, OpenMPI).
 
 ```bash
 # Example for multi-node FSDP training (adjust for your cluster)
@@ -185,7 +196,7 @@ torchrun \
     --rdzv_id=$SLURM_JOB_ID \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
-    train_moe_fsdp.py train_config_moe.yaml
+    train_nsa_fsdp.py train_config_nsa.yaml
 ```
 > **Note:** The FSDP launch command is a template. You must adapt variables like `--nnodes`, `--node_rank`, `--rdzv_id`, and `--rdzv_endpoint` to match the environment variables provided by your specific cluster's job scheduler.
 
@@ -202,7 +213,8 @@ torchrun \
 
 ## Limitations
 
-*   **Sparse Computation:** The current implementation uses a simple Python loop for token routing. While correct and readable, it is **not** optimized for maximum throughput. Future releases may include custom CUDA kernels or `torch.sparse` improvements.
+*   **NSA Kernel Dependency:** NSA relies on custom Triton/CUDA kernels and thus requires compatible hardware (e.g., modern NVIDIA GPUs) and a correctly configured environment to achieve its performance benefits.
+*   **Sparse Computation:** The current MoE implementation uses a simple Python loop for token routing. While correct and readable, it is **not** optimized for maximum throughput. Future releases may include custom CUDA kernels or `torch.sparse` improvements.
 *   **Expert Count & Memory:** While FLOPs per forward pass stay constant, **total parameter count scales linearly** with `n_experts`. Ensure you have enough GPU memory and CPU RAM to hold all expert weights.
 *   **FSDP Checkpointing:** The FSDP script saves both sharded (efficient) and full (for portability) checkpoints. Resuming training on a different number of GPUs than the one used for saving a sharded checkpoint can be complex and is an advanced use case.
 *   **Fine-tuning & Downstream Tasks:** As with the base repository, fine-tuning scripts and built-in evaluation suites are not included. Users must adapt the pre-trained model to downstream tasks using external tooling.
@@ -222,3 +234,4 @@ Join our community on Discord for discussions, help, and to share your results: 
 *   To Andrej Karpathy for `nanoGPT`.
 *   To the open-source AI community.
 *   To Google for the Switch Transformer paper and design principles.
+*   To the authors of Native Sparse Attention for their innovative work on efficient long-context modeling.
