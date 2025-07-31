@@ -17,7 +17,7 @@
 # --- Core ML & Torch Ecosystem ---
 # Pinned to 2.7.x to ensure stability with CUDA/Triton versions.
 torch~=2.7.1
-triton~=3.3.1  # Often tied to a specific torch version, good to keep pinned.
+triton~=3.4.0  # Often tied to a specific torch version, good to keep pinned.
 
 # --- Hugging Face Ecosystem ---
 # For data loading and tokenization.
