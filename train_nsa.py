@@ -1,19 +1,15 @@
 """
-Main Training Script for the LunarisCodex Language Model (MoE Version).
+Main Training Script for the LunarisCodex Language Model (NSA-MoE Version).
 
-This script is adapted to train the Mixture-of-Experts (MoE) version of the model.
-It handles the specific requirements of MoE training, such as the auxiliary load
-balancing loss and logging expert utilization.
-
-The training loop is designed to unpack the model's output, which includes the
-total loss, the main cross-entropy loss, and the auxiliary loss. These components
-are logged separately to monitor both model performance and expert load balancing,
-which is a critical aspect of stable MoE training.
+This script is adapted to train the hybrid Native Sparse Attention (NSA) and
+Mixture-of-Experts (MoE) version of the model. It handles the specific
+requirements of this architecture, such as:
+- Generating and passing an attention_mask for NSA to handle padding.
+- Unpacking and logging the auxiliary load balancing loss from the MoE layers.
+- Visualizing expert utilization for monitoring MoE training stability.
 
 Perplexity is calculated using only the main cross-entropy loss to ensure a
-meaningful measure of the model's predictive performance. Additionally, the script
-captures expert routing decisions and logs a utilization bar chart to Weights & Biases
-to provide a clear visualization of how tokens are distributed across experts.
+meaningful measure of the model's predictive performance.
 """
 
 import os
@@ -32,11 +28,11 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group, get_rank, get_world_size
 from tqdm import tqdm
 
-# Import the MoE-enabled model and configuration from the corresponding model file.
-from model_moe import LunarisCodex, LunarisCodexConfig
+# MODIFIED: Import from the new model file containing the NSA-MoE architecture.
+from model_nsa_moe import LunarisCodex, LunarisCodexConfig
 
 # The TrainConfig class itself requires no major changes, as the `from_yaml`
-# classmethod will automatically load MoE parameters if they are present in the YAML file.
+# classmethod will automatically load MoE/NSA parameters if they are present in the YAML file.
 @dataclass
 class TrainConfig:
     model: LunarisCodexConfig = field(default_factory=LunarisCodexConfig)
@@ -56,9 +52,9 @@ class TrainConfig:
     out_dir: str = "checkpoints"
     log_interval: int = 20
     save_interval: int = 1000
-    wandb_project: Optional[str] = "lunaris-codex-moe" # Suggested W&B project for the MoE experiment
+    wandb_project: Optional[str] = "lunaris-codex-nsa-moe" # Suggested W&B project
     wandb_entity: Optional[str] = None
-    wandb_run_name: Optional[str] = f"run-moe-{time.strftime('%Y-%m-%d-%H-%M')}"
+    wandb_run_name: Optional[str] = f"run-nsa-moe-{time.strftime('%Y-%m-%d-%H-%M')}"
 
     @property
     def sequence_length(self):
@@ -124,7 +120,11 @@ class ShardDataset(Dataset):
             seq = np.pad(seq, (0, pad_len), 'constant', constant_values=-1)
         seq_tensor = torch.from_numpy(seq.astype(np.int64))
         x, y = seq_tensor[:-1], seq_tensor[1:]
-        return x, y
+        
+        # MODIFIED: Generate and return the attention mask.
+        # The mask is 1 for real tokens and 0 for padding tokens (where value is -1).
+        attention_mask = (x != -1).long()
+        return x, y, attention_mask
 
 def setup_ddp():
     is_ddp = 'WORLD_SIZE' in os.environ and int(os.environ['WORLD_SIZE']) > 1
@@ -173,14 +173,6 @@ def train(config_path: str):
 
     if is_master_process:
         os.makedirs(config.out_dir, exist_ok=True)
-        print("-" * 50)
-        print(" " * 10 + "LUNARIS CODEX MoE TRAINING")
-        print("-" * 50)
-        print(f"Model Config: {config.model}")
-        if config.model.n_experts:
-             print(f"--> MoE Enabled: {config.model.n_experts} experts, aux_loss_weight={config.model.aux_loss_weight:.4f}")
-        print(f"Data: {config.data_dir}, SeqLen: {config.sequence_length}")
-        print("-" * 50)
 
     if is_master_process and config.wandb_project:
         import wandb
@@ -199,6 +191,69 @@ def train(config_path: str):
         model = DDP(model, device_ids=[int(os.environ['LOCAL_RANK'])])
 
     raw_model = model.module if is_ddp else model
+    # --- Start of Parameter Breakdown Logic ---
+    if is_master_process:
+        total_params = sum(p.numel() for p in raw_model.parameters() if p.requires_grad)
+        backbone_params = 0
+        expert_params = 0
+
+        for name, p in raw_model.named_parameters():
+            if p.requires_grad:
+                if 'experts' in name:
+                    expert_params += p.numel()
+                else:
+                    backbone_params += p.numel()
+
+        params_per_expert = 0
+        num_moe_layers = 0
+        first_moe_block = None
+
+        for block in raw_model.transformer.h:
+            if getattr(block, 'is_moe', False):
+                num_moe_layers += 1
+                if first_moe_block is None:
+                    first_moe_block = block
+
+        if first_moe_block:
+            for p in first_moe_block.feed_forward.experts[0].parameters():
+                if p.requires_grad:
+                    params_per_expert += p.numel()
+
+        active_params = backbone_params + (num_moe_layers * params_per_expert)
+    # --- End of Parameter Breakdown Logic ---
+
+    # --- Start of New Logging Block ---
+    if is_master_process:
+        print("\n" + "="*80)
+        print(" " * 20 + "LUNARIS CODEX NSA-MoE HYBRID TRAINING")
+        print("="*80)
+
+        print("\n" + "-"*30 + " MODEL & ARCHITECTURE " + "-"*26)
+        print(f"{'Total Trainable Parameters:':<35} {total_params/1e6:<8.2f}M")
+        if config.model.n_experts and config.model.n_experts > 0:
+            print(f"{'Backbone Parameters:':<35} {backbone_params/1e6:<8.2f}M")
+            print(f"{'Parameters per Expert:':<35} {params_per_expert/1e6:<8.2f}M")
+            print(f"{'Total Expert Parameters:':<35} {expert_params/1e6:<8.2f}M ({config.model.n_experts} experts x {num_moe_layers} layers)")
+            print(f"{'Active Parameters per Pass:':<35} {active_params/1e6:<8.2f}M")
+
+        print("\n" + "-"*36 + " DATA " + "-"*38)
+        print(f"{'Dataset Path:':<35} {config.data_dir}")
+        print(f"{'Sequence Length:':<35} {config.sequence_length}")
+
+        print("\n" + "-"*34 + " TRAINING " + "-"*36)
+        print(f"{'Device:':<35} {config.device}")
+        print(f"{'Precision:':<35} {dtype}")
+        print(f"{'Max Steps:':<35} {config.max_steps:,}")
+        print(f"{'Batch Size (per device):':<35} {config.batch_size}")
+        print(f"{'Gradient Accumulation Steps:':<35} {config.gradient_accumulation_steps}")
+
+        if is_ddp:
+            print("\n" + "-"*29 + " DISTRIBUTED SETUP " + "-"*28)
+            print(f"{'Backend:':<35} DDP")
+            print(f"{'World Size:':<35} {world_size}")
+
+        print("="*80 + "\n")
+    # --- End of New Logging Block ---
     optimizer = raw_model.configure_optimizers(
         weight_decay=config.weight_decay,
         learning_rate=config.learning_rate,
@@ -231,46 +286,43 @@ def train(config_path: str):
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
-        # Initialize accumulators for the different loss components.
-        # This is necessary for accurate logging across gradient accumulation steps.
         accumulated_loss = 0.0
         accumulated_main_loss = 0.0
         accumulated_aux_loss = 0.0
-        expert_indices_list = None # Ensure the variable exists outside the loop.
+        expert_indices_list = None
 
         for micro_step in range(config.gradient_accumulation_steps):
             is_last_micro_step = (micro_step == config.gradient_accumulation_steps - 1)
-            # When using DDP with gradient accumulation, we only want to sync gradients
-            # on the final micro-step. `model.no_sync()` prevents DDP from reducing
-            # gradients across processes on all but the last micro-step.
             ddp_context = model.no_sync() if is_ddp and not is_last_micro_step else nullcontext()
 
             with ddp_context:
                 try:
-                    x, y = next(data_iter)
+                    # MODIFIED: Unpack the new attention_mask from the data loader.
+                    x, y, attention_mask = next(data_iter)
                 except StopIteration:
                     current_epoch += 1
                     if is_ddp: train_loader.sampler.set_epoch(current_epoch)
                     data_iter = iter(train_loader)
-                    x, y = next(data_iter)
+                    # MODIFIED: Unpack the new attention_mask from the data loader.
+                    x, y, attention_mask = next(data_iter)
 
-                x, y = x.to(config.device, non_blocking=True), y.to(config.device, non_blocking=True)
+                # MODIFIED: Move the attention_mask to the correct device.
+                x, y, attention_mask = x.to(config.device, non_blocking=True), y.to(config.device, non_blocking=True), attention_mask.to(config.device, non_blocking=True)
 
                 with ctx:
-                    # The MoE model returns a tuple for loss: (total_loss, main_loss, aux_loss).
-                    # We unpack it here. The `expert_indices_list` is also captured for logging.
-                    logits, (loss, main_loss, aux_loss), _, expert_indices_list = model(x, targets=y, past_key_values=None)
-                    # Scale the loss to account for gradient accumulation.
+                    # MODIFIED: Pass the attention_mask to the model's forward pass.
+                    logits, (loss, main_loss, aux_loss), _, expert_indices_list = model(
+                        idx=x,
+                        targets=y,
+                        past_key_values=None,
+                        attention_mask=attention_mask
+                    )
                     loss = loss / config.gradient_accumulation_steps
 
-                # Accumulate each loss component separately for accurate logging.
                 accumulated_loss += loss.item()
                 if main_loss is not None:
-                    # The main_loss is the raw cross-entropy loss for this micro-batch.
-                    # We scale it by the number of accumulation steps before adding it to the accumulator.
                     accumulated_main_loss += main_loss.item() / config.gradient_accumulation_steps
                 if aux_loss is not None:
-                    # The same applies to the auxiliary loss.
                     accumulated_aux_loss += aux_loss.item() / config.gradient_accumulation_steps
 
                 loss.backward()
@@ -282,15 +334,12 @@ def train(config_path: str):
         if is_master_process:
             pbar.update(1)
             if current_step % config.log_interval == 0:
-                # Perplexity is calculated only from the main cross-entropy loss, as the
-                # auxiliary loss is for regularization and not a measure of predictive performance.
                 log_loss_main = accumulated_main_loss
                 try:
                     perplexity = math.exp(log_loss_main)
                 except (OverflowError, ValueError):
                     perplexity = float('inf')
 
-                # Log the separate loss components to the progress bar for real-time monitoring.
                 postfix_data = {
                     "loss": f"{accumulated_loss:.3f}",
                     "loss_main": f"{log_loss_main:.3f}",
@@ -302,7 +351,6 @@ def train(config_path: str):
                 pbar.set_postfix(postfix_data)
 
                 if config.wandb_project:
-                    # Create a single dictionary for all W&B logs for this step.
                     log_data = {
                         "step": current_step,
                         "epoch": current_epoch,
@@ -314,26 +362,16 @@ def train(config_path: str):
                         "grad_norm": grad_norm.item(),
                     }
 
-                    # Check if expert routing data is available for logging.
                     if expert_indices_list:
-                        # For visualization, we'll focus on the expert choices in the first MoE layer.
                         first_moe_layer_indices = expert_indices_list[0].detach().cpu()
-
-                        # Count the number of tokens routed to each expert.
                         num_experts = raw_model.config.n_experts
                         expert_counts = torch.bincount(first_moe_layer_indices.view(-1), minlength=num_experts)
-
-                        # Create a wandb.Table to be plotted as a bar chart.
                         table = wandb.Table(columns=["Expert ID", "Token Count"])
                         for i in range(num_experts):
                             table.add_data(f"Expert {i}", expert_counts[i].item())
-
-                        # Add the bar chart plot to our logging dictionary.
                         log_data["expert_utilization/layer_0"] = wandb.plot.bar(
                             table, "Expert ID", "Token Count", title="Expert Utilization (Layer 0)"
                         )
-
-                    # Log all metrics for this step to W&B at once.
                     wandb.log(log_data)
 
             if current_step > 0 and current_step % config.save_interval == 0:
@@ -360,7 +398,7 @@ def train(config_path: str):
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description="Train a LunarisCodex-MoE model.")
-    parser.add_argument("config", type=str, help="Path to the MoE config.yaml file.")
+    parser = argparse.ArgumentParser(description="Train a LunarisCodex NSA-MoE model.")
+    parser.add_argument("config", type=str, help="Path to the NSA-MoE config.yaml file.")
     args = parser.parse_args()
     train(args.config)
