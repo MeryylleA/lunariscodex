@@ -262,7 +262,7 @@ class MixtureOfExperts(nn.Module):
             # Compute the output from the expert.
             expert_outputs = self.experts[i](expert_inputs)
             # Place the expert outputs into the correct positions in the final output tensor.
-            final_output[token_mask] = expert_outputs
+            final_output[token_mask] = expert_outputs.to(final_output.dtype)
 
         # 5. Scale the output by the gate probability and reshape back.
         # This is a key step to make the routing decision differentiable. The gradient
