@@ -83,21 +83,6 @@ def apply_rotary_emb(
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
-# Pre-existing modules (RMSNorm, Attention) remain unchanged.
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-5):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def _norm(self, x: torch.Tensor):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
-    def forward(self, x: torch.Tensor):
-        output_dtype = x.dtype
-        x = self._norm(x.float()).to(output_dtype)
-        return x * self.weight
-
 class Attention(nn.Module):
     def __init__(self, config: LunarisCodexConfig):
         super().__init__()
@@ -276,8 +261,8 @@ class Block(nn.Module):
     def __init__(self, config: LunarisCodexConfig):
         super().__init__()
         self.attention = Attention(config)
-        self.attention_norm = RMSNorm(config.d_model)
-        self.ffn_norm = RMSNorm(config.d_model)
+        self.attention_norm = nn.RMSNorm(config.d_model, eps=1e-5)
+        self.ffn_norm = nn.RMSNorm(config.d_model, eps=1e-5)
 
         # Conditionally create either a standard FFN or a Mixture-of-Experts layer.
         if config.n_experts is not None and config.n_experts > 0:
@@ -354,7 +339,7 @@ class LunarisCodex(nn.Module):
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.d_model),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layers)]),
-            ln_f = RMSNorm(config.d_model),
+            ln_f = nn.RMSNorm(config.d_model, eps=1e-5),
             drop = nn.Dropout(config.dropout),
         ))
 
