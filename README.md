@@ -1,33 +1,35 @@
 # Lunaris Codex
 
-> **Note:** You are viewing an experimental branch of Lunaris Codex. This version includes state-of-the-art architectural features for enhanced performance and training efficiency. These features are currently under evaluation.
+> **Note:** You are viewing the latest version of Lunaris Codex. This version includes state-of-the-art architectural features including NTK-aware RoPE scaling, QK-Norm, and enhanced training stability. These modern enhancements represent the cutting edge of transformer architecture design.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/discord/1138864753915854898?label=Discord&logo=discord&color=7289DA)](https://discord.gg/JNsfzEwMtC)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MeryylleA/lunariscodex)
 
-A Note on Our Foundation: The architectural foundation of Lunaris Codex is proudly built upon Andrej Karpathy's nanoGPT. We chose nanoGPT for its brilliant simplicity and clarity, which aligns perfectly with our philosophy of providing a "hackable" and understandable base. This version, however, represents a significant evolution, integrating modern enhancements like **RoPE, Grouped Query Attention (GQA), Fused SwiGLU, and Gradient Checkpointing** to push performance and capabilities far beyond the original.
+A Note on Our Foundation: The architectural foundation of Lunaris Codex is proudly built upon Andrej Karpathy's nanoGPT. We chose nanoGPT for its brilliant simplicity and clarity, which aligns perfectly with our philosophy of providing a "hackable" and understandable base. This version, however, represents a significant evolution, integrating modern enhancements like **RoPE with NTK-aware scaling, Grouped Query Attention (GQA), QK-Norm, SwiGLU, Separated Dropout Controls, and Always-Causal Attention** to push performance and capabilities far beyond the original.
 
 **Lunaris Codex** is a streamlined, high-performance toolkit for pre-training powerful language models from scratch. This project provides a modern, Llama-style Transformer architecture and a robust, heavily optimized training script, designed for stability and maximum throughput.
 
 ### Our Philosophy
 This repository is built on a simple, powerful idea: **provide a rock-solid, understandable foundation for creating strong base models.** We focus on clean, efficient, and well-documented code for the core tasks of model definition and training. This approach empowers researchers and developers to bring their own unique datasets to a proven, production-grade pipeline.
 
-This new version marks a significant evolution of the project, moving to an architecture inspired by industry-leading models like Llama and Mistral, with a strong emphasis on modern best practices.
+This latest version marks a significant evolution of the project, incorporating cutting-edge architectural improvements from recent research while maintaining backward-compatible configs; older checkpoints load with strict=False.
 
 ---
 
 ## Architecture Overview
 
-Lunaris Codex is engineered for a balance of performance and clarity. Its architecture integrates several state-of-the-art features to ensure top-tier performance and training efficiency.
+Lunaris Codex is engineered for a balance of performance, clarity, and modern best practices. Its architecture integrates several state-of-the-art features to ensure top-tier performance and training efficiency with backward-compatible configuration support.
 
 | Component | Implementation | Benefits & Considerations |
 | :--- | :--- | :--- |
 | **Normalization** | **RMSNorm** | **Benefits:** A simpler, more efficient normalization technique than standard LayerNorm. It stabilizes training by normalizing activations based on their root mean square, using a single learnable gain parameter. |
-| **Positional Info**| **RoPE (Rotary Positional Embeddings)** | **Benefits:** Injects relative positional information, leading to excellent generalization across various sequence lengths. Achieved without any learned parameters, making it efficient. |
+| **Positional Info**| **RoPE with NTK-aware Scaling** | **Benefits:** Injects relative positional information with intelligent scaling for better sequence length extrapolation. NTK-aware scaling allows the model to handle sequences longer than seen during training without performance degradation. |
 | **Attention** | **Grouped Query Attention (GQA)** | **Benefits:** Drastically reduces the memory usage of the KV cache during inference by sharing Key/Value heads across groups of Query heads. This enables faster generation and larger context windows. |
+| **QK Normalization** | **Optional QK-Norm** | **Benefits:** Applies RMSNorm to query and key projections for enhanced training stability and improved embedding quality, especially beneficial for larger models (>1B parameters). |
 | **FFN Activation**| **SwiGLU** | **Benefits:** Offers improved performance over traditional activations like ReLU. It uses a gated linear unit, which allows the network to control the flow of information through the activation. |
-| **Training** | **Gradient Checkpointing** | **Benefits:** Massively reduces VRAM usage during training by recomputing activations during the backward pass instead of storing them. This allows for training larger models or using larger batch sizes, at the cost of a small compute overhead. |
+| **Attention Behavior** | **Always-Causal SDPA** | **Benefits:** Ensures consistent decoder-only behavior by always applying causal masking, preventing information leakage from future tokens during both training and inference. |
+| **Dropout Control** | **Separated Attention & Residual Dropout** | **Benefits:** Provides granular control over regularization with separate dropout rates for attention mechanisms and residual connections, allowing for more precise training tuning. |
 | **Structure** | **Pre-LayerNorm Decoder-Only Transformer** | **Benefits:** A standard, proven architecture for autoregressive language modeling. Pre-LayerNorm (applying normalization before attention/FFN) enhances training stability, especially for deep networks. |
 | **Embeddings** | **Tied Input/Output Token Embeddings** | **Benefits:** Significantly reduces the model's parameter count by sharing weights between the token embedding layer and the final output layer. Can also improve model quality and training efficiency. |
 
@@ -46,6 +48,16 @@ Our `train.py` script is a feature-rich and resilient trainer, meticulously engi
     *   **AdamW Optimizer:** Utilizes the AdamW optimizer, a standard choice for robust language model training.
     *   **Gradient Accumulation:** Allows for larger effective batch sizes by accumulating gradients over multiple steps.
     *   **Gradient Clipping:** Implements gradient clipping to prevent exploding gradients and stabilize training.
+    *   **Flash Attention/SDPA:** Uses PyTorch's optimized `scaled_dot_product_attention` (SDPA) for efficient attention computation. When available, this automatically uses Flash Attention kernels for significant memory and speed improvements:
+        ```python
+        # Automatic Flash Attention usage via SDPA
+        y = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=None,
+            dropout_p=self.attn_dropout_p if self.training else 0.0,
+            is_causal=True  # Always causal for decoder-only models
+        )
+        ```
 *   **Precise Learning Rate Control:** Features a learning rate scheduler with a linear warmup phase followed by a cosine decay. This allows for fine-grained control over the learning rate trajectory, crucial for stable convergence.
 *   **Resilient Checkpointing:** Automatically resumes from the latest checkpoint if training is interrupted. Checkpoints save the complete training state (model weights, optimizer state, step count, epoch, and training configuration) to ensure no progress is lost and facilitate seamless continuation.
 *   **Comprehensive Monitoring:** Integrates with Weights & Biases (W&B) for detailed experiment tracking (loss, perplexity, learning rate, etc.) and provides informative console logging with progress bars via `tqdm`.
@@ -109,12 +121,24 @@ model:
   n_layers: 20           # Number of transformer blocks (layers).
   n_heads: 16            # Number of attention heads (must divide d_model).
   max_seq_len: 1024     # Maximum sequence length the model can process.
-  dropout: 0.0           # Dropout rate for regularization (0.0 to disable).
+  
+  # --- Dropout Configuration (Enhanced Granular Control) ---
+  dropout: 0.0           # Legacy parameter for backward compatibility (used as resid_dropout).
+  attn_dropout: 0.0      # Dropout rate specifically for attention mechanism.
+  resid_dropout: 0.1     # Dropout rate for residual connections and projections.
 
   # --- Advanced Architectural Features ---
   n_kv_heads: 4          # Set to a value less than n_heads to enable Grouped Query Attention (GQA).
                          # `n_heads` must be divisible by `n_kv_heads`. e.g., 16 heads, 4 kv_heads.
-                         # Omit this or set to null to default to standard Multi-Head Attention.
+                         # Set equal to n_heads for standard Multi-Head Attention.
+  
+  # --- Modern Architectural Enhancements ---
+  use_qk_norm: true      # Enable QK-Norm for improved training stability and embedding quality.
+                         # Highly recommended for models >1B parameters, optional for smaller models.
+  
+  rope_theta: 10000.0    # Base frequency for RoPE (standard value is 10000.0).
+  rope_ntk_scale_base: 2048  # Base sequence length for NTK-aware RoPE scaling.
+                         # Helps with extrapolation to longer sequences than seen during training.
   
   use_gradient_checkpointing: true # Set to true to enable gradient checkpointing.
                                    # This saves a large amount of GPU memory at the cost of
@@ -146,7 +170,7 @@ log_interval: 20         # Log metrics to console/W&B every N steps.
 
 # --- W&B (Weights & Biases) Configuration (Optional) ---
 wandb_project: null                # Your W&B project name (e.g., "MyLunarisProject"). Keep as null or remove to disable.
-wandb_run_name: "experiment-001"   # A name for this specific run (e.g., "gqa-llama-run1").
+wandb_run_name: "experiment-001"   # A name for this specific run (e.g., "qk-norm-gqa-run1").
 # wandb_entity: null               # Your W&B entity/team name (if applicable).
 ```
 
@@ -163,6 +187,58 @@ The script will handle the rest: setting up distributed training (if applicable)
 
 Good luck, and we're excited to see what you build with Lunaris Codex!
 
+---
+
+## Modern Architecture Features Guide
+
+### NTK-Aware RoPE Scaling
+```yaml
+model:
+  rope_theta: 10000.0           # Base frequency (standard)
+  rope_ntk_scale_base: 1024     # Base sequence length for scaling
+  max_seq_len: 2048             # Target sequence length
+```
+**When the model encounters sequences longer than `rope_ntk_scale_base`, the RoPE frequencies are automatically scaled to maintain performance. This is crucial for sequence length extrapolation.**
+
+### QK-Norm Configuration
+```yaml
+model:
+  use_qk_norm: true    # Enable for better stability
+```
+**Recommended for:**
+- Models with >1B parameters
+- Training with large learning rates
+- When you notice training instability
+
+**Optional for:**
+- Smaller models (<600M parameters)
+- Well-tuned stable training setups
+
+### Dropout Granular Control
+```yaml
+model:
+  attn_dropout: 0.05     # Light regularization in attention
+  resid_dropout: 0.1     # Standard regularization in projections/FFN
+```
+**Best Practices:**
+- Use lower `attn_dropout` (0.0-0.1) as attention patterns are crucial
+- Use higher `resid_dropout` (0.1-0.2) for standard regularization
+- For small datasets, increase both values
+- For large datasets, consider keeping both low (0.0-0.05)
+
+### Grouped Query Attention (GQA)
+```yaml
+model:
+  n_heads: 16      # Query heads
+  n_kv_heads: 4    # Key/Value heads (enables GQA)
+```
+**Memory Savings:**
+- 16:4 ratio = ~70% KV cache reduction
+- 12:3 ratio = ~75% KV cache reduction
+- 8:2 ratio = ~75% KV cache reduction
+
+---
+
 ## Best Practices for Pre-training
 
 Achieving optimal results when pre-training large language models requires careful attention to various aspects of the process. Here are some best practices to consider when using Lunaris Codex:
@@ -171,6 +247,12 @@ Achieving optimal results when pre-training large language models requires caref
     *   **Foundation First**: The performance, capabilities, and biases of your model are overwhelmingly determined by your training data. "Garbage in, garbage out" very much applies.
     *   **Prioritize Quality**: Use high-quality, well-cleaned, and diverse datasets. Invest time in preprocessing your data, which can include deduplication, filtering inappropriate content, and ensuring consistent formatting.
     *   **Diversity Matters**: A model trained on diverse text (e.g., web crawls, books, code, scientific papers, conversational text) will generally be more robust and adaptable.
+
+*   **Modern Architecture Configuration**:
+    *   **QK-Norm**: Enable `use_qk_norm: true` for models >1B parameters or when experiencing training instability.
+    *   **GQA Ratios**: Use ratios like 16:4, 12:3, or 8:2 for `n_heads:n_kv_heads` to balance performance and memory efficiency.
+    *   **NTK Scaling**: Set `rope_ntk_scale_base` to your typical training sequence length for optimal extrapolation.
+    *   **Dropout Tuning**: Start with `attn_dropout: 0.0, resid_dropout: 0.1` and adjust based on overfitting signals.
 
 *   **Tokenizer Choice and Configuration**:
     *   **Domain Alignment**: Train a tokenizer that is appropriate for your target domain(s) and language(s). A well-suited tokenizer can significantly impact performance and convergence.
@@ -207,6 +289,46 @@ Achieving optimal results when pre-training large language models requires caref
 
 *   **Start Small, Iterate Fast**:
     *   **Debug Pipeline First**: Before launching a multi-day or multi-week training run on a massive dataset with a large model, conduct smaller experiments. Use a fraction of your data and a smaller model to verify your data loading, tokenization, training loop, and logging are all working correctly. This can save significant time and resources.
+
+---
+
+## Migration Guide
+
+### From Previous Versions
+
+If you're upgrading from a previous version of Lunaris Codex, the new architecture uses backward-compatible configs. Your existing configurations will work without changes, but you can optionally enable new features:
+
+```yaml
+# Minimal migration - your old config works as-is
+model:
+  vocab_size: 50304
+  d_model: 768
+  n_layers: 12
+  n_heads: 12
+  # ... your existing parameters
+
+# Optional: Enable new features gradually
+model:
+  # ... your existing parameters
+  use_qk_norm: true              # Add for better stability
+  attn_dropout: 0.0              # Explicit attention dropout
+  resid_dropout: 0.1             # Rename from old 'dropout'
+  rope_ntk_scale_base: 1024      # For sequence extrapolation
+```
+
+### Loading Old Checkpoints
+
+Old checkpoints can be loaded with flexibility using `strict=False`. The model will:
+1. Load existing weights normally
+2. Initialize new QK-Norm layers (if enabled) with proper values
+3. Handle the transition from single `dropout` to separated dropout seamlessly
+
+```python
+# Loading older checkpoints with new architecture
+checkpoint = torch.load('old_checkpoint.pt')
+model.load_state_dict(checkpoint['model'], strict=False)
+print("Loaded old checkpoint with architectural updates")
+```
 
 ---
 
