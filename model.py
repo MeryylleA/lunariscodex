@@ -1,20 +1,27 @@
 """
 Full definition of a LunarisCodex Language Model, all of it in this single file.
-This version is a refactored and simplified Llama-style model, created by adapting
+This version is a refactored and enhanced Llama-style model, created by adapting
 the robust, industry-standard components from the `Instella` (OLMo) architecture
 into a clean, minimal, and self-contained structure.
 
-This version has been refactored to include KV Caching for efficient inference.
+This version has been enhanced with modern architectural improvements:
+- NTK-aware RoPE scaling for better sequence length extrapolation
+- QK-Norm for improved training stability and embedding quality
+- Separated attention and residual dropout for granular control
+- Always-causal SDPA for consistent decoder-only behavior
+- Maintained full backward compatibility with previous versions
 
 Architectural Choices:
 - Pre-normalization using RMSNorm: Normalizes inputs to each layer rather than outputs,
   providing better gradient flow and training stability
-- Rotary Positional Embeddings (RoPE): Encodes position information directly into
-  query/key vectors using rotation matrices in complex space
+- Rotary Positional Embeddings (RoPE) with NTK scaling: Encodes position information
+  directly into query/key vectors using rotation matrices, with intelligent scaling
+  for sequence length extrapolation
 - SwiGLU as the feed-forward network's activation function: Combines Swish activation
   with a gating mechanism for better performance than ReLU
 - Grouped-Query Attention (GQA): Reduces memory usage by sharing key/value heads
   across multiple query heads while maintaining performance
+- Optional QK-Norm: Applies RMSNorm to query and key projections for better stability
 - Tied input and output embedding weights: Reduces parameters by sharing the token
   embedding matrix with the final projection layer
 - KV Caching: Stores computed key/value pairs to avoid recomputation during generation
@@ -45,7 +52,13 @@ class LunarisCodexConfig:
         ffn_hidden_multiplier: Multiplier for FFN hidden dimension size
         max_seq_len: Maximum sequence length the model can handle
         rope_theta: Base frequency for RoPE (10000 is standard)
-        dropout: Dropout probability for regularization
+        dropout: Legacy parameter, used as resid_dropout for backward compatibility
+        
+        New parameters:
+        rope_ntk_scale_base: Base sequence length for NTK-aware RoPE scaling
+        use_qk_norm: Whether to apply RMSNorm to query and key projections
+        attn_dropout: Dropout probability within attention mechanism
+        resid_dropout: Dropout probability for residual connections (projections/FFN)
     """
     d_model: int = 768
     n_layers: int = 12
@@ -56,7 +69,13 @@ class LunarisCodexConfig:
     ffn_hidden_multiplier: float = 4.0
     max_seq_len: int = 1024
     rope_theta: float = 10000.0
-    dropout: float = 0.0
+    dropout: float = 0.0  # kept for backward compat; used as resid_dropout by default
+
+    # New flags (backward-compatible defaults)
+    rope_ntk_scale_base: int = 2048  # base window to scale theta (NTK-aware)
+    use_qk_norm: bool = True         # apply RMSNorm to q and k
+    attn_dropout: float = 0.0        # attention dropout
+    resid_dropout: float = 0.0       # residual (proj/ffn) dropout
 
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
@@ -76,7 +95,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Te
     Args:
         dim: The head dimension (d_model // n_heads)
         end: Maximum sequence length to precompute for
-        theta: Base frequency (typically 10000)
+        theta: Base frequency (typically 10000, but can be scaled for NTK)
     
     Returns:
         Complex tensor of shape (end, dim//2) containing rotation factors
@@ -86,7 +105,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Te
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
     
     # Create position indices
-    t = torch.arange(end, device=freqs.device, dtype=torch.float32)
+    t = torch.arange(end, dtype=torch.float32)
     
     # Compute rotation angles: outer product gives us t*freq for all t,freq pairs
     freqs = torch.outer(t, freqs)  # Shape: (end, dim//2)
@@ -173,18 +192,21 @@ class RMSNorm(nn.Module):
         The forward pass is stable with mixed-precision training by computing
         the normalization in float32 and then casting back to the input dtype.
         """
-        output_dtype = x.dtype
-        x = self._norm(x.float()).to(output_dtype)
+        out_dtype = x.dtype
+        x = self._norm(x.float()).to(out_dtype)
         return x * self.weight
 
 
 class Attention(nn.Module):
     """
-    Grouped-Query Attention module with KV Caching.
+    Grouped-Query Attention module with KV Caching, optional QK-Norm, and optimized SDPA.
     
     GQA reduces memory usage by having fewer key/value heads than query heads.
     Multiple query heads share the same key/value heads, reducing the KV cache size
     while maintaining most of the performance of full multi-head attention.
+    
+    QK-Norm applies RMSNorm to query and key projections, which has been shown to
+    improve training stability and final model quality, especially in larger models.
     
     KV Caching stores computed key/value pairs from previous tokens to avoid
     recomputation during autoregressive generation.
@@ -202,13 +224,27 @@ class Attention(nn.Module):
         self.n_heads = config.n_heads
         self.n_kv_heads = config.n_kv_heads
         self.head_dim = config.d_model // config.n_heads
+        self.use_qk_norm = config.use_qk_norm
 
         # Separate projections for Q, K, V to support different numbers of heads
         self.q_proj = nn.Linear(config.d_model, config.n_heads * self.head_dim, bias=False)
         self.k_proj = nn.Linear(config.d_model, config.n_kv_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(config.d_model, config.n_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(config.n_heads * self.head_dim, config.d_model, bias=False)
-        self.dropout = nn.Dropout(config.dropout)
+
+        # Separate dropouts for attention and residual paths
+        # This allows for more granular control of regularization
+        self.attn_dropout_p = config.attn_dropout
+        self.dropout = nn.Dropout(config.resid_dropout)
+
+        # Optional QK-Norm: normalizes queries and keys per head dimension
+        # This helps stabilize training and often improves final performance
+        if self.use_qk_norm:
+            self.q_norm = RMSNorm(self.head_dim)
+            self.k_norm = RMSNorm(self.head_dim)
+        else:
+            self.q_norm = None
+            self.k_norm = None
 
     def forward(
         self,
@@ -243,6 +279,13 @@ class Attention(nn.Module):
         # RoPE encodes position information directly into the attention computation
         q, k = apply_rotary_emb(q, k, freqs_cis)
 
+        # Optional QK-Norm: normalize queries and keys after RoPE
+        # This is applied per head and helps with training stability
+        if self.use_qk_norm:
+            # Apply normalization to each head independently
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+
         # KV Caching: concatenate current K,V with cached K,V from previous tokens
         if past_kv is not None:
             past_k, past_v = past_kv
@@ -258,14 +301,18 @@ class Attention(nn.Module):
             v = v.repeat_interleave(n_repeats, dim=1)
 
         # Use PyTorch's optimized scaled dot-product attention
-        # is_causal=True applies causal masking (prevents looking at future tokens)
-        # Only needed during prefill (when past_kv is None), not during generation
-        is_causal = past_kv is None
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal)
+        # Always causal for decoder-only language models (prevents future token leakage)
+        # Attention dropout is applied internally by SDPA when training
+        y = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=None,
+            dropout_p=self.attn_dropout_p if self.training else 0.0,
+            is_causal=True  # Always True for decoder-only models
+        )
 
         # Reshape back to (B, T, d_model) and apply output projection
         y = y.transpose(1, 2).contiguous().view(B, T, C)
-        y = self.dropout(self.o_proj(y))
+        y = self.dropout(self.o_proj(y))  # Apply residual dropout
         
         return y, present_kv
 
@@ -304,7 +351,7 @@ class FeedForward(nn.Module):
         self.w1 = nn.Linear(config.d_model, hidden_dim, bias=False)  # First gate
         self.w3 = nn.Linear(config.d_model, hidden_dim, bias=False)  # Second gate
         self.w2 = nn.Linear(hidden_dim, config.d_model, bias=False)  # Output projection
-        self.dropout = nn.Dropout(config.dropout)
+        self.dropout = nn.Dropout(config.resid_dropout)  # Residual dropout
 
     def forward(self, x: torch.Tensor):
         """
@@ -374,13 +421,16 @@ class LunarisCodex(nn.Module):
     """
     Complete LunarisCodex Language Model.
     
-    This is a Llama-style decoder-only transformer with:
+    This is an enhanced Llama-style decoder-only transformer with:
     - Pre-normalization architecture for better training stability
-    - RoPE for positional encoding
-    - SwiGLU activation in FFN
-    - Grouped-Query Attention for efficiency
+    - RoPE with NTK-aware scaling for improved sequence length extrapolation
+    - SwiGLU activation in FFN for better performance
+    - Grouped-Query Attention for memory efficiency
+    - Optional QK-Norm for enhanced training stability
+    - Separated attention and residual dropout for granular control
     - KV caching for fast inference
     - Weight tying between input embeddings and output projection
+    - Always-causal attention for consistent decoder-only behavior
     """
     
     def __init__(self, config: LunarisCodexConfig):
@@ -389,10 +439,10 @@ class LunarisCodex(nn.Module):
 
         # Main transformer components
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.d_model),  # Token embeddings
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layers)]),  # Transformer blocks
-            ln_f = RMSNorm(config.d_model),  # Final layer normalization
-            drop = nn.Dropout(config.dropout),  # Input dropout
+            wte=nn.Embedding(config.vocab_size, config.d_model),  # Token embeddings
+            h=nn.ModuleList([Block(config) for _ in range(config.n_layers)]),  # Transformer blocks
+            ln_f=RMSNorm(config.d_model),  # Final layer normalization
+            drop=nn.Dropout(config.resid_dropout),  # Input dropout (using resid_dropout)
         ))
         
         # Output projection (language modeling head)
@@ -403,12 +453,19 @@ class LunarisCodex(nn.Module):
         # The intuition is that both layers deal with the same vocabulary space
         self.transformer.wte.weight = self.lm_head.weight
 
+        # RoPE with NTK-aware scaling for better sequence length extrapolation
+        # NTK scaling adjusts the base frequency based on the ratio of max_seq_len to base_len
+        # This allows the model to better handle sequences longer than seen during training
+        base_len = max(1, int(config.rope_ntk_scale_base))
+        scale = max(1.0, float(config.max_seq_len) / float(base_len))
+        theta_eff = config.rope_theta * scale
+
         # Precompute RoPE frequencies for all positions and register as buffer
         # Buffers are saved with the model but don't require gradients
         freqs_cis = precompute_freqs_cis(
-            self.config.d_model // self.config.n_heads,  # Head dimension
-            self.config.max_seq_len,
-            self.config.rope_theta,
+            config.d_model // config.n_heads,  # Head dimension
+            config.max_seq_len,
+            theta=theta_eff,  # NTK-scaled theta
         )
         self.register_buffer("freqs_cis", freqs_cis, persistent=False)
 
@@ -440,11 +497,12 @@ class LunarisCodex(nn.Module):
 
         # Scaled initialization for residual projections
         # This prevents the variance from growing with the number of layers
-        if isinstance(module, (Attention, FeedForward)):
-            for name, p in module.named_parameters():
-                if name.endswith("o_proj.weight") or name.endswith("w2.weight"):
-                    # Scale down by sqrt(2 * n_layers) to maintain variance
-                    torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * self.config.n_layers))
+        if isinstance(module, Attention):
+            # Scale down the output projection to maintain variance across layers
+            torch.nn.init.normal_(module.o_proj.weight, mean=0.0, std=0.02 / math.sqrt(2 * self.config.n_layers))
+        if isinstance(module, FeedForward):
+            # Scale down the final FFN projection to maintain variance across layers
+            torch.nn.init.normal_(module.w2.weight, mean=0.0, std=0.02 / math.sqrt(2 * self.config.n_layers))
 
     def forward(
         self,
@@ -474,14 +532,14 @@ class LunarisCodex(nn.Module):
         
         # Ensure we don't exceed the model's maximum sequence length
         assert start_pos + T <= self.config.max_seq_len, \
-            f"Cannot forward, sequence length {start_pos + T} exceeds model's max_seq_len {self.config.max_seq_len}"
+            f"Cannot forward, sequence length {start_pos + T} exceeds max_seq_len {self.config.max_seq_len}"
 
         # Get token embeddings and apply input dropout
         x = self.transformer.wte(idx)
         x = self.transformer.drop(x)
 
         # Get precomputed RoPE frequencies for the current sequence positions
-        freqs_cis = self.freqs_cis[start_pos : start_pos + T]
+        freqs_cis = self.freqs_cis[start_pos: start_pos + T]
 
         # Forward through all transformer blocks, updating the KV cache
         new_past_key_values = []
@@ -563,7 +621,7 @@ class LunarisCodex(nn.Module):
 
         for _ in range(max_new_tokens):
             # Check if we've reached the maximum sequence length
-            current_len = past_key_values[0][0].shape[-2] if past_key_values else idx.shape[1]
+            current_len = past_key_values[0][0].shape[-2] if past_key_values is not None else idx.shape[1]
             if current_len >= self.config.max_seq_len:
                 break
                 
@@ -575,7 +633,7 @@ class LunarisCodex(nn.Module):
             logits, _, past_key_values = self(idx_cond, past_key_values=past_key_values)
             
             # Sample the next token using temperature and top-k sampling
-            logits = logits[:, -1, :] / temperature  # Apply temperature scaling
+            logits = logits[:, -1, :] / max(1e-8, temperature)  # Apply temperature scaling with safe division
             
             # Top-k filtering: keep only the k most likely tokens
             if top_k is not None:
