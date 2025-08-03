@@ -2,7 +2,7 @@
 
 > **Note:** You are viewing an **experimental branch** of Lunaris Codex.  
 > This version introduces a **Mixture-of-Experts (MoE) layer** in the style of the **Switch Transformer (k=1)**.  
-> All MoE-related code lives in `model_moe.py` and is trained with `train_moe.py` or the new `train_moe_fsdp.py` for large-scale jobs.  
+> All MoE-related code lives in `model_moe.py` and is trained with `train_moe.py` or the optimized `train_moe_fsdp.py` for large-scale jobs.  
 > These features are under active evaluation—expect breaking changes and rapid iteration.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
@@ -28,7 +28,7 @@ Lunaris Codex is engineered for a balance of performance and clarity. Its archit
 | **Positional Info**| **RoPE (Rotary Positional Embeddings)** | Injects relative positional information, leading to excellent generalization across various sequence lengths. Achieved without any learned parameters, making it efficient. |
 | **Attention** | **Grouped Query Attention (GQA) with Fused Layers** | Drastically reduces the memory usage of the KV cache during inference by sharing Key/Value heads across groups of Query heads. To maximize throughput, the Q, K, and V projection layers are fused into a single linear operation, reducing GPU kernel overhead and improving computational speed. |
 | **FFN Activation**| **Fused SwiGLU** | Offers improved performance over traditional activations like ReLU. Our implementation fuses the two linear projections (for the gate and the value) into a single, wider layer. This minimizes memory access latency and significantly boosts performance over a non-fused approach. |
-| **Mixture-of-Experts (MoE)** | **Switch-style (k=1) Router + Expert FFNs** | **Benefits:** Achieves a much larger effective parameter count **without** increasing computation per forward pass. Each token is routed to exactly **one** expert (k=1), keeping FLOPs constant while unlocking model capacity. **Considerations:** Requires an auxiliary load-balancing loss to prevent expert collapse and ensure uniform utilization. |
+| **Mixture-of-Experts (MoE)** | **Optimized Switch-style (k=1) Router + Expert FFNs** | **Benefits:** Achieves a much larger effective parameter count **without** increasing computation per forward pass. Each token is routed to exactly **one** expert (k=1), keeping FLOPs constant while unlocking model capacity. **Advanced Features:** Capacity-aware routing with token dropping prevents OOM, router z-loss ensures stability, and efficient contiguous dispatch minimizes scatter overhead. **Considerations:** Requires dual auxiliary losses (load-balancing + z-loss) and router-specific learning rates for optimal training. |
 | **Training** | **Gradient Checkpointing** | Massively reduces VRAM usage during training by recomputing activations during the backward pass instead of storing them. This allows for training larger models or using larger batch sizes, at the cost of a small compute overhead. |
 | **Distributed Strategy** | **DDP & FSDP** | Supports both **DDP** (for simple, single-node multi-GPU) and **FSDP (ZeRO-3)** for maximum memory efficiency in large-scale, multi-node environments. |
 | **Embeddings** | **Tied Input/Output Token Embeddings** | Significantly reduces the model's parameter count by sharing weights between the token embedding layer and the final output layer. Can also improve model quality and training efficiency. |
@@ -39,7 +39,7 @@ Lunaris Codex is engineered for a balance of performance and clarity. Its archit
 
 Our training infrastructure is designed to be both accessible for smaller experiments and powerful enough for large-scale pre-training. We now provide **two** distinct training scripts:
 *   `train_moe.py`: A robust script for single-node training using `DistributedDataParallel` (DDP). Perfect for getting started or for training on a single machine with multiple GPUs.
-*   `train_moe_fsdp.py`: A highly optimized script for large-scale, multi-node training using `FullyShardedDataParallel` (FSDP).
+*   `train_moe_fsdp.py`: A highly optimized script for large-scale, multi-node training using `FullyShardedDataParallel` (FSDP). Features production-grade optimizations including router-specific learning rates, expert utilization monitoring, and enhanced DataLoader performance.
 
 Both scripts are feature-rich and resilient, meticulously engineered to handle long-running jobs with stability and efficiency.
 
@@ -47,29 +47,38 @@ Both scripts are feature-rich and resilient, meticulously engineered to handle l
 *   **Optimized Data Loading (`ShardDataset`):** Employs a memory-mapped `ShardDataset` class, which efficiently streams data from massive datasets sharded into multiple `.npy` files. This approach minimizes RAM overhead while maximizing I/O throughput.
 *   **High-Performance Training:**
     *   **Mixed-Precision:** Full support for `bfloat16` (preferred on compatible hardware) and `fp16` to accelerate training and reduce memory footprint.
-    *   **`torch.compile`:** Integrates `torch.compile` for graph optimization, potentially speeding up model execution.
+    *   **`torch.compile`:** Integrates `torch.compile` with safe fallback handling for graph optimization, potentially speeding up model execution.
     *   **Distributed Training (`DDP`):** The `train_moe.py` script leverages PyTorch's `DistributedDataParallel` (DDP) for efficient multi-GPU training on a single node.
     *   **FSDP (Fully Sharded Data Parallel):** The `train_moe_fsdp.py` script dramatically reduces memory usage on each GPU by sharding model parameters, gradients, and optimizer states across all available devices (ZeRO-3 style). This is essential for training extremely large models.
-    *   **AdamW Optimizer:** Utilizes the AdamW optimizer, a standard choice for robust language model training.
+    *   **Intelligent Optimizer:** Router parameters receive 0.5x learning rate for improved stability, with automatic parameter grouping for weight decay.
+    *   **Enhanced DataLoader:** Persistent workers, prefetching, and optimized memory pinning for maximum throughput.
     *   **Gradient Accumulation:** Allows for larger effective batch sizes by accumulating gradients over multiple steps.
     *   **Gradient Clipping:** Implements gradient clipping to prevent exploding gradients and stabilize training.
 *   **Precise Learning Rate Control:** Features a learning rate scheduler with a linear warmup phase followed by a cosine decay. This allows for fine-grained control over the learning rate trajectory, crucial for stable convergence.
 *   **Resilient Checkpointing:** Automatically resumes from the latest checkpoint if training is interrupted. Checkpoints save the complete training state (model weights, optimizer state, step count, epoch, and training configuration) to ensure no progress is lost and facilitate seamless continuation.
-*   **Comprehensive Monitoring:** Integrates with Weights & Biases (W&B) for detailed experiment tracking (loss, perplexity, learning rate, gradient norms, **main_loss**, **aux_loss**, etc.), provides informative console logging with `tqdm`, and **visual diagnostics for expert utilization**.
+*   **Comprehensive Monitoring:** Integrates with Weights & Biases (W&B) for detailed experiment tracking (loss, perplexity, learning rate, gradient norms, **main_loss**, **aux_loss**, **router z-loss**, etc.), provides informative console logging with `tqdm`, and **visual diagnostics for expert utilization and token drop rates**.
 
-### Auxiliary Load-Balancing Loss (`aux_loss`)
+### Enhanced MoE Architecture & Losses
 
-Because only a **sparse subset** of experts is active for any given token, there is a risk that the gating network will **collapse**—always routing tokens to the same few experts.
-To prevent this, we add an **auxiliary loss** (`aux_loss`) that encourages uniform expert utilization.
+Our MoE implementation goes beyond basic Switch Transformer routing with several advanced features:
 
-*   **Mechanism:** The loss is computed as the dot product between (a) the **fraction of tokens dispatched to each expert** and (b) the **fraction of router probability mass assigned to each expert** (see `MixtureOfExperts.forward()` for the exact formula).
-*   **Scaling:** The loss is multiplied by `config.aux_loss_weight` (default: `1e-2`, taken from the Switch Transformer paper) before being added to the **main cross-entropy loss**.
-*   **Logging:** The training scripts log `main_loss`, `aux_loss`, and their sum separately in both the console and Weights & Biases, making it easy to track the two loss components.
+#### Dual Auxiliary Losses
+1. **Load-Balancing Loss (`aux_loss`):** Because only a **sparse subset** of experts is active for any given token, there is a risk that the gating network will **collapse**—always routing tokens to the same few experts. The loss is computed as the dot product between (a) the **fraction of tokens dispatched to each expert** and (b) the **fraction of router probability mass assigned to each expert**.
 
-While the `aux_loss` metric is a good numerical indicator of load balancing, a direct visual inspection provides much clearer and more actionable insight into expert health.
+2. **Router Z-Loss:** An additional regularization term that prevents router logits from growing too large, improving training stability. Computed as the squared magnitude of the log-sum-exp of router logits.
 
-#### Expert Utilization Chart
-To provide deeper insight beyond the `aux_loss` metric, the `train_moe.py` script now logs an interactive bar chart to Weights & Biases. This chart displays the exact number of tokens processed by each expert in real-time, making it trivial to spot imbalances or "dead" experts (experts that are not receiving any tokens). This direct feedback is invaluable for diagnosing routing issues and tuning the `aux_loss_weight` hyperparameter.
+Both losses are scaled by configurable weights (`aux_loss_weight` and `router_z_loss_weight`) and logged separately for fine-grained monitoring.
+
+#### Capacity-Aware Routing & Token Dropping
+* **Capacity Factor:** Each expert has a maximum capacity (e.g., 1.25x the average tokens per expert) to prevent memory overflow.
+* **Token Dropping:** When an expert exceeds capacity, excess tokens are dropped and only receive residual connections, maintaining training stability.
+* **Drop Rate Monitoring:** The training script tracks and logs the percentage of dropped tokens per layer for diagnostic purposes.
+
+#### Expert Utilization Monitoring
+Beyond numerical loss metrics, the training script provides real-time expert utilization analytics:
+- **Per-layer expert token counts** logged to W&B
+- **Token drop rate tracking** for capacity overflow monitoring  
+- **Interactive visualizations** for immediate feedback on routing health
 
 ---
 
@@ -139,6 +148,8 @@ model:
   n_experts: 8               # Number of expert FFNs in each MoE layer
   n_experts_per_token: 1     # Switch-style routing: 1 expert per token
   aux_loss_weight: 0.01      # Weight for the load-balancing auxiliary loss
+  capacity_factor: 1.25      # Expert capacity as multiple of average tokens per expert
+  router_z_loss_weight: 0.001 # Weight for router z-loss regularization
 
 # --- Data Configuration ---
 data_dir: "path/to/your/npy_shards/"
@@ -174,7 +185,7 @@ torchrun --standalone --nproc_per_node=auto train_moe.py train_config_moe.yaml
 ```
 
 ##### For Large-Scale Training (FSDP):
-For large multi-GPU or multi-node training, the `train_moe_fsdp.py` script is strongly recommended for its memory efficiency. The launch command is more involved and depends on your cluster environment (e.g., Slurm, OpenMPI).
+For large multi-GPU or multi-node training, the `train_moe_fsdp.py` script is strongly recommended for its memory efficiency and production optimizations. The launch command is more involved and depends on your cluster environment (e.g., Slurm, OpenMPI).
 
 ```bash
 # Example for multi-node FSDP training (adjust for your cluster)
@@ -194,15 +205,22 @@ torchrun \
 ## Best Practices for Pre-training
 
 *   **Start Small, Iterate Fast:** Before committing to a multi-week run, validate your pipeline with a small model (`d_model=512`, `n_layers=8`, etc.) and a subset of data.
-*   **Monitor Expert Utilization:** Watch the `aux_loss` curve and the expert utilization bar chart in W&B. If the chart shows severe imbalance or `aux_loss` spikes, consider tuning `aux_loss_weight` or checking data quality.
-*   **Tune `aux_loss_weight` Carefully:** Too low → expert collapse. Too high → degraded language modeling performance. Typical values: `1e-3`–`1e-2`.
-*   **All other best practices** (data quality, tokenizer alignment, learning-rate tuning, checkpointing) remain identical to the original README.
+*   **Monitor Expert Health:** Watch multiple metrics in W&B:
+    - `aux_loss` and `router_z_loss` curves for routing stability
+    - Expert utilization charts for load balancing
+    - Token drop rates for capacity overflow
+*   **Tune MoE Hyperparameters Carefully:**
+    - `aux_loss_weight`: Too low → expert collapse. Too high → degraded language modeling. Range: `1e-3`–`1e-2`
+    - `router_z_loss_weight`: Prevents router logit explosion. Range: `1e-4`–`1e-3`
+    - `capacity_factor`: Higher values reduce dropping but increase memory usage. Range: `1.0`–`2.0`
+*   **Router Learning Rate:** The FSDP script automatically applies 0.5x learning rate to router parameters for improved stability.
+*   **All other best practices** (data quality, tokenizer alignment, learning-rate tuning, checkpointing) remain identical to standard dense model training.
 
 ---
 
 ## Limitations
 
-*   **Sparse Computation:** The current implementation uses a simple Python loop for token routing. While correct and readable, it is **not** optimized for maximum throughput. Future releases may include custom CUDA kernels or `torch.sparse` improvements.
+*   **Sparse Computation:** While the current implementation uses efficient contiguous dispatch via sorting, it may not achieve peak theoretical throughput compared to specialized MoE kernels.
 *   **Expert Count & Memory:** While FLOPs per forward pass stay constant, **total parameter count scales linearly** with `n_experts`. Ensure you have enough GPU memory and CPU RAM to hold all expert weights.
 *   **FSDP Checkpointing:** The FSDP script saves both sharded (efficient) and full (for portability) checkpoints. Resuming training on a different number of GPUs than the one used for saving a sharded checkpoint can be complex and is an advanced use case.
 *   **Fine-tuning & Downstream Tasks:** As with the base repository, fine-tuning scripts and built-in evaluation suites are not included. Users must adapt the pre-trained model to downstream tasks using external tooling.
