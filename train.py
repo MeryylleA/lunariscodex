@@ -26,7 +26,6 @@ Key Features:
   improving final model performance.
 - **Resilient Checkpointing:** Saves not only the model weights but also the optimizer
   state, current step, and epoch. This allows training to be resumed seamlessly from
-
   the last checkpoint in case of interruptions.
 - **Configuration Management:** Uses a YAML file and a `dataclass` for clean, version-
   controllable, and easily modifiable training configurations.
@@ -65,8 +64,9 @@ class TrainConfig:
 
     # Data configuration
     data_dir: str = "data/"
-    # CORREÇÃO: Usar max_seq_len para ser consistente com model.py
-    # sequence_length será definido automaticamente baseado em model.max_seq_len
+    # CORRECTION: The explicit `sequence_length` field has been removed.
+    # It is now a property that reads directly from `model.max_seq_len`
+    # to guarantee consistency across the entire pipeline.
 
     # Optimizer configuration (AdamW parameters)
     learning_rate: float = 3e-4
@@ -99,10 +99,11 @@ class TrainConfig:
     @property
     def sequence_length(self):
         """
-        CORREÇÃO: Usar max_seq_len do modelo.
-        This property ensures that the data loading pipeline always uses the same
-        sequence length that the model was configured for. It's a robust way to
-        avoid mismatches between data preparation and model architecture.
+        CORRECTION APPLIED: This property creates a single source of truth.
+        The data loading pipeline (which uses `config.sequence_length`) will now
+        always use the exact same sequence length that the model architecture
+        is configured for (`config.model.max_seq_len`), preventing any risk
+        of a mismatch.
         """
         return self.model.max_seq_len
 
@@ -122,6 +123,9 @@ class TrainConfig:
         model_config = LunarisCodexConfig(**model_config_dict)
         config_dict['model'] = model_config
 
+        # GUARANTEE: Any stray `sequence_length` key in the top-level of an old
+        # YAML file will be safely ignored, as it doesn't match a field here.
+        
         # Define fields that need specific type casting
         float_fields = ['learning_rate', 'weight_decay', 'beta1', 'beta2', 'grad_clip']
         int_fields = ['warmup_steps', 'max_steps', 'batch_size', 'gradient_accumulation_steps', 'num_epochs', 'save_interval', 'log_interval']
@@ -274,15 +278,17 @@ def get_lr(step, config: TrainConfig):
         return config.learning_rate * step / config.warmup_steps
     # 2. If we are past the max steps, use a small constant LR
     if step >= config.max_steps:
-        return config.learning_rate * 0.01 # A small final learning rate
+        # A small final learning rate, slightly larger than the minimum of the cosine decay
+        return config.learning_rate * 0.1
 
     # 3. Cosine decay phase
     # Calculate how far we are into the decay phase
     decay_ratio = (step - config.warmup_steps) / (config.max_steps - config.warmup_steps)
     # Calculate the cosine coefficient (from 1 to 0)
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-    # Linearly interpolate between the full LR and 1% of the LR
-    return (config.learning_rate * 0.01) + coeff * (config.learning_rate * 0.99)
+    # Linearly interpolate between the full LR and 10% of the LR (a common practice)
+    min_lr = config.learning_rate * 0.1
+    return min_lr + coeff * (config.learning_rate - min_lr)
 
 # --- Robust checkpoint key unwrapping ---
 def unwrap_model_keys(state_dict):
@@ -336,19 +342,22 @@ def train(config_path: str):
         print("-" * 50)
         print(" " * 15 + "LUNARIS CODEX TRAINING")
         print("-" * 50)
-        print(f"Model: {config.model}")
-        print(f"Data: {config.data_dir}")
-        print(f"Batch size: {config.batch_size} per GPU")
-        print(f"Gradient accumulation: {config.gradient_accumulation_steps}")
-        print(f"Learning rate: {config.learning_rate}")
-        print(f"Max steps: {config.max_steps}")
-        print(f"Sequence length: {config.sequence_length}") # CORREÇÃO: Mostrar sequence_length
+        print(f"Model Config: {config.model}")
+        print(f"Data Dir: {config.data_dir}")
+        print(f"Batch Size (per GPU): {config.batch_size}")
+        print(f"Gradient Accumulation: {config.gradient_accumulation_steps}")
+        print(f"Learning Rate: {config.learning_rate}")
+        print(f"Max Steps: {config.max_steps}")
+        print(f"Sequence Length: {config.sequence_length}") # This now reliably shows model.max_seq_len
         print("-" * 50)
 
     # Initialize Weights & Biases for logging, only on the master process.
     if is_master_process and config.wandb_project:
         import wandb
-        wandb.init(project=config.wandb_project, entity=config.wandb_entity, name=config.wandb_run_name, config=config.__dict__)
+        # Convert dataclass to dict for wandb config logging
+        config_dict = config.__dict__
+        config_dict['model'] = config.model.__dict__
+        wandb.init(project=config.wandb_project, entity=config.wandb_entity, name=config.wandb_run_name, config=config_dict)
 
     # --- Data Loading ---
     train_dataset = ShardDataset(data_dir=config.data_dir, sequence_length=config.sequence_length)
@@ -361,8 +370,7 @@ def train(config_path: str):
     model = LunarisCodex(config.model).to(config.device)
 
     if is_master_process:
-        # The model's __init__ already prints this, but repeating here is fine.
-        num_params = sum(p.numel() for p in model.parameters()) / 1e6
+        num_params = model.get_num_params() / 1e6
         print(f"[MODEL] Number of parameters: {num_params:.2f}M")
 
     # `torch.compile` is a JIT compiler that can significantly speed up your model
@@ -375,7 +383,6 @@ def train(config_path: str):
         model = DDP(model, device_ids=[int(os.environ['LOCAL_RANK'])])
 
     # --- Optimizer ---
-    # CORREÇÃO: Usar o método configure_optimizers do modelo
     # This is good practice: the model itself defines how its parameters should be optimized
     # (e.g., applying weight decay only to certain layers).
     raw_model = model.module if is_ddp else model # Get the raw model from behind the DDP wrapper
@@ -418,19 +425,16 @@ def train(config_path: str):
     data_iter = iter(train_loader)
 
     while current_step < config.max_steps:
-        current_step += 1
-
         # Manually set the learning rate for each step based on our scheduler.
-        lr = get_lr(current_step, config)
+        lr = get_lr(current_step + 1, config) # use current_step + 1 for 1-based step counting in LR scheduler
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
-
-        accumulated_loss = 0.0
 
         # --- Gradient Accumulation Loop ---
         # This inner loop simulates a larger batch size. We run the forward and backward
         # passes `gradient_accumulation_steps` times, accumulating gradients in the
         # .grad attribute of each parameter before finally calling optimizer.step().
+        accumulated_loss = 0.0
         for micro_step in range(config.gradient_accumulation_steps):
             is_last_micro_step = (micro_step == config.gradient_accumulation_steps - 1)
             # This is a key DDP optimization: `model.no_sync()` prevents gradient
@@ -445,6 +449,7 @@ def train(config_path: str):
                 except StopIteration:
                     # This means we've reached the end of the dataset for the current epoch.
                     current_epoch += 1
+                    if is_master_process: print(f"\n[DATA] Starting epoch {current_epoch}...")
                     if is_ddp:
                         # Inform the sampler of the new epoch for correct shuffling.
                         train_loader.sampler.set_epoch(current_epoch)
@@ -454,12 +459,11 @@ def train(config_path: str):
 
                 x, y = x.to(config.device, non_blocking=True), y.to(config.device, non_blocking=True)
 
-                # CORREÇÃO CRÍTICA: Usar a assinatura correta do modelo
-                # model.py espera: forward(idx, targets=None, past_key_values=None)
-                # Retorna: (logits, loss, new_kv_cache)
                 # The forward pass is executed under the mixed-precision autocast context.
                 with ctx:
-                    logits, loss, _ = model(x, targets=y, past_key_values=None)
+                    # model.py expects: forward(idx, targets=None, past_key_values=None)
+                    # and returns: (logits, loss, new_kv_cache)
+                    _, loss, _ = model(x, targets=y)
                     # We scale the loss down before the backward pass. This is important
                     # to ensure that when gradients are summed up, their average magnitude
                     # is correct, as if they came from a single larger batch.
@@ -477,6 +481,8 @@ def train(config_path: str):
         # Reset gradients to zero for the next accumulation cycle.
         optimizer.zero_grad(set_to_none=True)
 
+        current_step += 1
+        
         # --- Logging and Checkpointing (Master Process Only) ---
         if is_master_process:
             pbar.update(1)
@@ -495,13 +501,11 @@ def train(config_path: str):
                 else:
                     perplexity = float('inf')
 
-                current_lr = lr
-
                 # Update the progress bar with the latest metrics.
                 postfix_data = {
                     "loss": f"{log_loss:.3f}",
                     "ppl": f"{perplexity:.2f}" if perplexity != float('inf') else "inf",
-                    "lr": f"{current_lr:.2e}",
+                    "lr": f"{lr:.2e}",
                     "gnorm": f"{grad_norm.item():.2f}"
                 }
                 pbar.set_postfix(postfix_data)
@@ -509,12 +513,12 @@ def train(config_path: str):
                 # Log metrics to Weights & Biases if configured.
                 if config.wandb_project:
                     wandb.log({
-                        "step": current_step,
-                        "loss": log_loss,
-                        "perplexity": perplexity,
-                        "lr": current_lr,
-                        "grad_norm": grad_norm.item(),
-                        "epoch": current_epoch
+                        "train/step": current_step,
+                        "train/loss": log_loss,
+                        "train/perplexity": perplexity,
+                        "train/lr": lr,
+                        "train/grad_norm": grad_norm.item(),
+                        "train/epoch": current_epoch
                     })
 
             # Checkpointing
@@ -523,7 +527,7 @@ def train(config_path: str):
                 checkpoint = {
                     'model': raw_model.state_dict(),
                     'optimizer': optimizer.state_dict(),
-                    'config': config.__dict__, # Save config for reproducibility
+                    'config': config_dict, # Save config for reproducibility
                     'step': current_step,
                     'epoch': current_epoch,
                 }
@@ -533,7 +537,7 @@ def train(config_path: str):
                 # Also save as the "latest" checkpoint for easy resuming.
                 latest_path = os.path.join(config.out_dir, "latest_checkpoint.pt")
                 torch.save(checkpoint, latest_path)
-                print(f"\n[CHECKPOINT] Saved checkpoint to {save_path}")
+                pbar.write(f"\n[CHECKPOINT] Saved checkpoint to {save_path}")
 
     # --- Cleanup ---
     if is_master_process:
