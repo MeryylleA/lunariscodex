@@ -162,7 +162,7 @@ class ShardDataset(Dataset):
         # Calculate total tokens by summing the size of all shards without loading them
         total_tokens = sum(np.load(shard, mmap_mode='r').shape[0] for shard in self.shards)
         # The total number of training samples is the total tokens divided by the sequence length
-        self.total_samples = total_tokens // self.sequence_length
+        self.total_samples = max(0, (total_tokens - 1) // self.sequence_length)
 
         print(f"[DATA] Loaded {len(self.shards)} shards. Total tokens: {total_tokens/1e9:.2f}B.")
         print(f"[DATA] Creating {self.total_samples:,} non-overlapping samples of length {self.sequence_length}.")
