@@ -22,7 +22,7 @@ triton~=3.4.0  # Often tied to a specific torch version, good to keep pinned.
 # --- Hugging Face Ecosystem ---
 # For data loading and tokenization.
 datasets~=4.0
-tokenizers~=0.21
+tokenizers~=0.22
 huggingface-hub~=0.34
 safetensors~=0.6
 
