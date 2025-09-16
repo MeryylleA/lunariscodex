@@ -23,7 +23,7 @@ triton~=3.4.0  # Often tied to a specific torch version, good to keep pinned.
 # For data loading and tokenization.
 datasets~=4.0
 tokenizers~=0.22
-huggingface-hub~=0.34
+huggingface-hub~=0.35
 safetensors~=0.6
 
 # --- Utilities ---
