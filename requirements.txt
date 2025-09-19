@@ -35,4 +35,4 @@ pandas~=2.3  # If used in any data analysis/prep scripts.
 
 # --- Experiment Tracking ---
 # For logging metrics and results.
-wandb~=0.21
+wandb~=0.22
